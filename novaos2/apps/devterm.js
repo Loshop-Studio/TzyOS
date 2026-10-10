@@ -28,6 +28,7 @@
     "  storage keys | storage get <键> | storage set <键> <值> | storage del <键>",
     "  toast <文字>               弹轻提示",
     "  lock                       锁屏          reload    重载 OS",
+    "  reload -all                重置运行实例/监视器/系统配置，保留软件和个人文件",
     "  dbg on | dbg off           开/关调试日志回传",
     "复合参数可整体给 JSON：vfs {\"op\":\"get\",\"path\":\"/音乐/a.mp3\"}",
     "clear 清屏 · help 本帮助 · 带 «电脑 前缀的行是电脑下发的命令"

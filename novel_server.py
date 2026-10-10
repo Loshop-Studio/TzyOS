@@ -19,6 +19,7 @@ if ROOT not in sys.path:
 
 from flask import Flask  # noqa: E402
 from novelsrc.facade import register_routes  # noqa: E402
+from novacore.paths import init_run_logging  # noqa: E402
 
 
 def create_app():
@@ -35,6 +36,7 @@ def create_app():
 
 
 def main():
+    init_run_logging("novel", mirror_stdout=False)
     ap = argparse.ArgumentParser(description="Tzy OS novel backend")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int,

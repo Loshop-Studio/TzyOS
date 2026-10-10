@@ -62,6 +62,28 @@
 
     function pageBody() { return document.body || document.documentElement; }
 
+    function recoverOS() {
+        if (watchdog) { clearTimeout(watchdog); watchdog = 0; }
+        shown = true;
+        handshaked = false;
+        reloads = 0;
+        armedAt = Date.now();
+        var bust = "?recovery=" + Date.now();
+        try {
+            if (frame && frame.parentNode) frame.parentNode.removeChild(frame);
+            if (host && host.parentNode) host.parentNode.removeChild(host);
+        } catch (e) { }
+        frame = null;
+        host = null;
+        root = null;
+        createFrame(FRAME_SRC + bust);
+        ensureHost().style.display = "block";
+        ensureHost().style.visibility = "visible";
+        ensureHost().style.opacity = "1";
+        armWatchdog();
+        poke("recovery");
+    }
+
     function ensureHost() {
         if (host && host.parentNode) return host;
         host = document.createElement("div");
@@ -136,9 +158,16 @@
         if (watchdog) clearTimeout(watchdog);
         watchdog = setTimeout(function () {
             if (!shown || handshaked || reloads >= 3) return;
-            reloads++;
-            var hostAlive = !!(host && host.parentNode);
-            poke((hostAlive ? "rtry" : "det") + reloads);
+            // Do not replace the iframe with cache-busting URLs while the
+            // WebView is explicitly offline; keep the current state stable.
+            if (navigator.onLine === false) {
+                poke("offline");
+                return;
+            }
+            reloads = 3;
+            poke("stalled");
+            return;
+            /*
             handshaked = false;
             try {
                 var bust = "?t=" + Date.now() + "&r=" + reloads;
@@ -153,7 +182,7 @@
                     createFrame(FRAME_SRC + bust);
                 }
             } catch (e) { }
-            armWatchdog();
+            armWatchdog(); */
         }, 8000);
     }
 
@@ -161,6 +190,9 @@
         if (!frame) createFrame();
         else ensureHost();
         host.style.display = "block";
+        host.style.visibility = "visible";
+        host.style.opacity = "1";
+        host.style.pointerEvents = "auto";
         shown = true;
         armedAt = Date.now();
         poke("show");
@@ -168,10 +200,20 @@
         if (!handshaked) armWatchdog();
     }
     function hide() {
-        if (host) host.style.display = "none";
+        if (host) {
+            // Keep the iframe mounted and running in the background. Toggling
+            // display:none freezes some WebViews and causes a black screen on return.
+            host.style.display = "block";
+            host.style.visibility = "visible";
+            host.style.opacity = "0";
+            host.style.pointerEvents = "none";
+        }
         shown = false;
         poke("hide");
     }
+    window.addEventListener("online", function () {
+        if (shown && !handshaked) armWatchdog();
+    });
     function toggle() {
         // 一次口令在部分内核上会同时命中 input 与 keydown 两条通道，
         // 造成“唤起后立刻又隐藏”（闪一下）；700ms 内的重复触发一律忽略。

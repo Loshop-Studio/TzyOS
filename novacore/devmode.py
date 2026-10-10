@@ -26,6 +26,7 @@ from novacore.paths import slog
 POLL_SECONDS = 25.0      # 长轮询单次挂起上限（秒）
 EXEC_TIMEOUT = 30.0      # exec 默认等待结果上限（秒）
 SESSION_TTL = 900.0      # 会话闲置回收（15 分钟）
+TEMP_ENABLE_TTL = 120.0  # 平板临时开启后，无轮询两分钟自动关闭
 RESULT_KEEP = 300        # 最近完成结果保留条数
 LOG_KEEP = 400           # 服务端事件日志上限
 
@@ -64,6 +65,8 @@ class DevHub(object):
         self.glock = threading.Lock()
         self.log = []             # 服务端事件 [{t,tag,msg}]
         self.started = time.time()
+        self.runtime_enabled = None
+        self.runtime_until = 0.0
 
     # ---------------- 基础 ----------------
     def note(self, tag, msg):
@@ -77,7 +80,34 @@ class DevHub(object):
             pass
 
     def enabled(self):
-        return bool(cfg("dev_mode", True))
+        if self.runtime_enabled is not None:
+            if self.runtime_enabled and time.time() > self.runtime_until:
+                self.runtime_enabled = False
+            return bool(self.runtime_enabled)
+        return bool(cfg("dev_mode", False))
+
+    def set_enabled(self, enabled):
+        enabled = bool(enabled)
+        self.runtime_enabled = enabled
+        self.runtime_until = time.time() + TEMP_ENABLE_TTL if enabled else 0.0
+        if not enabled:
+            with self.glock:
+                sessions = list(self.sessions.values())
+                self.sessions.clear()
+            for sess in sessions:
+                with sess.cond:
+                    for waiter in sess.waiters.values():
+                        waiter["result"] = {"ok": False, "error": "DevLink 已关闭"}
+                        waiter["event"].set()
+                    sess.queue[:] = []
+                    sess.cond.notify_all()
+        self.note("control", "DevLink 临时%s" % ("开启" if enabled else "关闭"))
+        return {"ok": True, "enabled": self.enabled(),
+                "temporary": True, "ttl": int(TEMP_ENABLE_TTL)}
+
+    def touch_enabled(self):
+        if self.runtime_enabled:
+            self.runtime_until = time.time() + TEMP_ENABLE_TTL
 
     def gc(self):
         """回收闲置会话（调用方需持 glock）。"""
@@ -111,6 +141,7 @@ class DevHub(object):
     def hello(self, body):
         if not self.enabled():
             return {"ok": False, "devoff": True}
+        self.touch_enabled()
         tok = str(body.get("token") or "")
         with self.glock:
             self.gc()
@@ -139,6 +170,7 @@ class DevHub(object):
             return {"ok": False, "invalid": True, "error": "会话失效，请重新握手"}
         if not self.enabled():
             return {"ok": False, "devoff": True}
+        self.touch_enabled()
         wait = POLL_SECONDS
         try:
             wait = min(POLL_SECONDS, max(0.0, float(body.get("wait", POLL_SECONDS))))
@@ -197,7 +229,7 @@ class DevHub(object):
     # ---------------- 电脑侧 ----------------
     def exec(self, cmd, args=None, token="", timeout=None):
         if not self.enabled():
-            return {"ok": False, "error": "开发模式已关闭（config.json dev_mode=false）"}
+            return {"ok": False, "error": "DevLink 已关闭"}
         tok = self._pick(token)
         if tok is None:
             return {"ok": False, "error": "没有在线的平板设备（平板先打开 Tzy OS）"}
@@ -253,6 +285,8 @@ HUB = DevHub()
 # ---------------- 挂载点端点（proxy_app 调用，request 上下文内） ----------------
 def handle_sys(kind):
     body = request.get_json(force=True, silent=True) or {}
+    if kind == "control":
+        return _json(HUB.set_enabled(bool(body.get("enabled"))))
     if kind == "hello":
         return _json(HUB.hello(body))
     if kind == "poll":

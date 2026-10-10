@@ -152,6 +152,7 @@ export class Interact {
 export class InteractProxy {
   /** @param {HTMLElement} element */
   constructor(element) {
+    this.element = element;
     this.interact = new Interact(element);
     this.mouseEvent = null;
     this.touchEvent = null;
@@ -159,6 +160,11 @@ export class InteractProxy {
     this.mouseEventId = 0;
     this.touchEventId = 0;
     this.keyboardEventId = 0;
+    this.closeHandler = evt => {
+      const target = evt && evt.target;
+      if (target && target.contains && target.contains(this.element)) this.destroy();
+    };
+    document.addEventListener('nv-close', this.closeHandler);
   }
   /** @param {MouseCallbacks} callbacks */
   setMouseEvent(callbacks) {
@@ -173,6 +179,7 @@ export class InteractProxy {
     this.keyboardEvent = callbacks;
   }
   activate() {
+    this.deactive();
     if (this.mouseEvent) this.mouseEventId = this.interact.setMouseEvent(this.mouseEvent);
     if (this.touchEvent) this.touchEventId = this.interact.setTouchEvent(this.touchEvent);
     if (this.keyboardEvent) this.keyboardEventId = this.interact.setKeyboardEvent(this.keyboardEvent);
@@ -181,5 +188,16 @@ export class InteractProxy {
     if (this.mouseEventId) this.interact.clearMouseEvent(this.mouseEventId);
     if (this.touchEventId) this.interact.clearTouchEvent(this.touchEventId);
     if (this.keyboardEventId) this.interact.clearKeyboardEvent(this.keyboardEventId);
+    this.mouseEventId = 0;
+    this.touchEventId = 0;
+    this.keyboardEventId = 0;
+  }
+  /** Remove input listeners while preserving the app DOM and local data. */
+  destroy() {
+    this.deactive();
+    if (this.closeHandler) {
+      document.removeEventListener('nv-close', this.closeHandler);
+      this.closeHandler = null;
+    }
   }
 }

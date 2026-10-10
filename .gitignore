@@ -10,6 +10,19 @@ config.json.tmp
 dist/
 build-dist/
 
+# Local staging areas and packaged build artifacts
+.staging/
+*.zip
+*.7z
+*.rar
+*.tzyp
+*.apk
+*.exe
+*.msi
+
+# Unpacked app-package build directories (release .tzyp files are force-added selectively)
+apps_repo/*/
+
 # 构建缓存（下载的 embed 包 / get-pip.py）
 build-cache/
 

@@ -629,6 +629,9 @@ button { font-family: inherit; }
 .nv-set-row:first-of-type { border-top: none; }
 .nv-set-row .nv-set-k { -webkit-box-flex: 0; flex: none; min-width: 84px; color: #6b6252; }
 .nv-set-row .nv-set-v { -webkit-box-flex: 1; flex: 1; text-align: right; word-break: break-all; }
+.nv-set-backup-panel { border-top: 1px solid #ddd3bf; margin-top: 8px; padding-top: 4px; }
+.nv-restore-select { width: min(100%, 360px); margin-bottom: 6px; }
+.nv-restore-all { display: block; margin-top: 14px; color: #5b5346; font-size: 13px; }
 .nv-set-swatches { display: -webkit-box; display: flex; gap: 12px; padding-top: 4px; }
 .nv-wp-sw {
   width: 46px; height: 46px; border-radius: 12px;

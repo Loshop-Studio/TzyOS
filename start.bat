@@ -1,6 +1,16 @@
 @echo off
 title Tzy OS stealth injection service (PC hotspot mode)
 
+rem Relaunch the batch file in a hidden console.  The marker is kept as an
+rem argument so the hidden child does not start another hidden child.
+if /i "%~1"=="/__nova_hidden" goto :hidden_entry
+if /i "%~2"=="/__nova_hidden" goto :hidden_entry
+set "START_ARG=%~1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%START_ARG%','/__nova_hidden' -WindowStyle Hidden"
+exit /b
+
+:hidden_entry
+
 rem ================= Hotspot config (password must be >= 8 chars) =================
 set "HOTSPOT_SSID=Hack Hotspot"
 set "HOTSPOT_PWD=helloezy"
@@ -16,7 +26,7 @@ rem ---- Auto elevate (ports 53/80 and hotspot control require admin) ----
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Requesting administrator privileges...
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1' -Verb RunAs"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1','/__nova_hidden' -Verb RunAs -WindowStyle Hidden"
     exit /b
 )
 
@@ -65,6 +75,7 @@ if "%NO_HOTSPOT%"=="0" (
     echo     Connect phone/tablet to this hotspot, then open the column page as usual.
 ) else (
     echo [3/4] Hotspot control skipped (/nohotspot = LAN mode)
+    echo     LAN mode DNS cache poisoning: enabled by default
     echo     LAN mode: set the tablet Wi-Fi DNS to this PC's LAN IP, then open
     echo     the column page as usual. (The IP is printed below on startup.)
 )

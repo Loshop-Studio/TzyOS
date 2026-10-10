@@ -13,8 +13,9 @@ from novacore.dns_service import DNSThread
 from novacore.proxy_app import create_proxy_app
 from novacore.admin_app import create_admin_app
 from novacore.proxy_engine import PROXY
+from novacore import web_proxy
 from novacore.netutil import local_ip, answer_ip
-from novacore.paths import set_slog_debug, slog_debug, slog
+from novacore.paths import init_run_logging, set_slog_debug, slog_debug, slog
 from novacore import tray as tray_mod
 
 class ServerThread(threading.Thread):
@@ -35,11 +36,14 @@ class ServerThread(threading.Thread):
 
 
 def main():
+    run_log = init_run_logging("server")
     requests.packages.urllib3.disable_warnings()
     load_config()
+    web_proxy.reload_config()
     set_slog_debug(bool(cfg("debug", False)))
     slog("info", "boot", "服务启动，调试模式=%s，python=%s" %
          (slog_debug() and "开" or "关", sys.version.split()[0]))
+    slog("info", "boot", "本次启动日志：%s" % run_log)
     errs = validate(CONFIG)
     if errs:
         slog("warn", "boot", "config.json 校验未通过：%s" % "; ".join(
@@ -49,6 +53,9 @@ def main():
             print("  - %s: %s" % (k, v))
 
     lan_mode = bool(cfg("lan_mode", False))
+    # LAN mode must retain the long-lived static cache fallback by default.
+    if lan_mode and cfg("lan_cache_poison", True):
+        CONFIG["cache_poison"] = True
     # DNS 应答与运行模式解耦：局域网模式也默认开启（平板 Wi-Fi DNS 指向本机，
     # 只解析 hijack_domains 里的平台域名，其余域名照常转发）。
     dns = DNSThread() if cfg("dns_enable", True) else None

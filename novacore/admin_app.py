@@ -38,6 +38,8 @@ def create_admin_app():
             return jsonify({"ok": False, "errors": errors}), 400
         try:
             save_config(merged)
+            from novacore import web_proxy
+            web_proxy.reload_config()
         except Exception as e:
             return jsonify({"ok": False, "errors": {"_": "保存失败：%s" % e}}), 500
         return jsonify({"ok": True, "note": "已保存。平板刷新专栏页面后新配置生效。"})

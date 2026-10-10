@@ -7,6 +7,8 @@ import json
 import mimetypes
 import os
 import re
+import subprocess
+import threading
 import time
 
 import requests
@@ -14,6 +16,10 @@ from flask import Response, abort, jsonify, request, send_file
 
 from novacore.configutil import cfg, fs_root
 from novacore.netutil import hotspot_ip, answer_ip, local_ip
+
+_FTP_LIMIT = threading.BoundedSemaphore(12)
+_SMB_LIMIT = threading.BoundedSemaphore(12)
+_SMB_AUTH_LOCK = threading.Lock()
 
 # ----------------------------- Tzy OS 应用 API -----------------------------
 # 全部在挂载点下同源提供（前端 fetch 相对路径 api/...），离线必然不可用，
@@ -59,9 +65,25 @@ def _api_body():
 
 def _safe_fs_path(rel):
     """把相对路径解析到 fs_root 内，越界抛 ValueError（防目录穿越）。"""
-    root = os.path.abspath(fs_root())
     rel = str(rel or "").replace("\\", "/").strip().lstrip("/")
+    if str(cfg("fs_root", "") or "").strip() == "__ALL_DRIVES__":
+        if not rel:
+            return None
+        m = re.match(r"^([A-Za-z]):(?:/(.*))?$", rel)
+        if not m:
+            raise ValueError("需要先选择盘符")
+        drive = m.group(1).upper() + ":\\"
+        if not os.path.isdir(drive):
+            raise ValueError("盘符不可用")
+        tail = (m.group(2) or "").replace("/", os.sep)
+        fp = os.path.abspath(os.path.join(drive, tail))
+        bound = os.path.abspath(drive).rstrip(os.sep) + os.sep
+        if fp != os.path.abspath(drive) and not fp.startswith(bound):
+            raise ValueError("路径越界")
+        return fp
+    root = os.path.abspath(fs_root())
     fp = os.path.abspath(os.path.join(root, rel.replace("/", os.sep)))
+    bound = root.rstrip(os.sep) + os.sep
     # 盘符根（如 D:\\）末尾自带分隔符，需 rstrip 后再拼，否则根下一级全部误判
     bound = root.rstrip(os.sep) + os.sep
     if fp != root and not fp.startswith(bound):
@@ -93,11 +115,24 @@ def api_fs(op, method):
 
     try:
         if op == "list":
+            if str(cfg("fs_root", "") or "").strip() == "__ALL_DRIVES__" and not str(arg("path") or "").strip():
+                entries = []
+                if os.name == "nt":
+                    for code in range(ord("A"), ord("Z") + 1):
+                        drive = chr(code) + ":\\"
+                        if os.path.isdir(drive):
+                            entries.append(_entry_info(chr(code) + ":", drive))
+                return _api_json({"ok": True, "root": "__ALL_DRIVES__", "path": "", "entries": _sort_entries(entries)})
             fp = _safe_fs_path(arg("path"))
             if not os.path.isdir(fp):
                 return _api_json({"ok": False, "error": "不是目录"}, 400)
             items = [_entry_info(n, os.path.join(fp, n)) for n in sorted(os.listdir(fp))]
-            rel = os.path.relpath(fp, fs_root()).replace(os.sep, "/")
+            if str(cfg("fs_root", "") or "").strip() == "__ALL_DRIVES__":
+                drive_root = os.path.splitdrive(fp)[0] + os.sep
+                rel_tail = os.path.relpath(fp, drive_root).replace(os.sep, "/")
+                rel = os.path.splitdrive(fp)[0] + ("" if rel_tail == "." else "/" + rel_tail)
+            else:
+                rel = os.path.relpath(fp, fs_root()).replace(os.sep, "/")
             return _api_json({"ok": True, "root": fs_root(),
                               "path": "" if rel == "." else rel,
                               "entries": _sort_entries(items)})
@@ -168,6 +203,9 @@ def api_ftp(method):
     op = str(b.get("op", "")).strip()
     path = str(b.get("path", "") or "")
     ftp = None
+    acquired = _FTP_LIMIT.acquire(timeout=10)
+    if not acquired:
+        return _api_json({"ok": False, "error": "FTP 服务繁忙，请稍后重试"}, 503)
     try:
         ftp = _ftp_connect(b)
         if op == "list":
@@ -228,6 +266,7 @@ def api_ftp(method):
                     ftp.close()
                 except Exception:
                     pass
+        _FTP_LIMIT.release()
 
 
 def _smb_unc(b):
@@ -248,29 +287,34 @@ def _smb_auth(b):
     """需要凭据时用系统 net use 建立会话（Windows 自带，不引入 pip 依赖）。"""
     key = "\\\\%s\\%s" % (str(b.get("host", "")).strip().lstrip("\\"),
                           str(b.get("share", "")).strip().strip("\\/"))
-    if key in _SMB_AUTH:
-        return
-    user = str(b.get("user", "") or "").strip()
-    cmd = ["net", "use", key]
-    if user:
-        cmd.append(str(b.get("pass", "") or ""))
-        cmd.append("/user:" + user)
-    try:
-        subprocess.run(cmd, capture_output=True, timeout=15, text=True, errors="ignore")
+    with _SMB_AUTH_LOCK:
+        if key in _SMB_AUTH:
+            return
+        user = str(b.get("user", "") or "").strip()
+        cmd = ["net", "use", key]
+        if user:
+            cmd.append(str(b.get("pass", "") or ""))
+            cmd.append("/user:" + user)
+        result = subprocess.run(cmd, capture_output=True, timeout=15,
+                                text=True, errors="ignore")
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "net use 认证失败").strip()
+            raise RuntimeError(detail)
         _SMB_AUTH[key] = True
-    except Exception:
-        pass
 
 
 def api_smb(method):
     r"""Windows UNC 共享直读（\\host\share），凭据走 net use。"""
     b = _api_body()
     op = str(b.get("op", "")).strip()
+    acquired = _SMB_LIMIT.acquire(timeout=10)
+    if not acquired:
+        return _api_json({"ok": False, "error": "SMB 服务繁忙，请稍后重试"}, 503)
     try:
-        unc = _smb_unc(b)
-    except ValueError as e:
-        return _api_json({"ok": False, "error": str(e)}, 400)
-    try:
+        try:
+            unc = _smb_unc(b)
+        except ValueError as e:
+            return _api_json({"ok": False, "error": str(e)}, 400)
         _smb_auth(b)
         if op == "list":
             if not os.path.isdir(unc):
@@ -312,6 +356,8 @@ def api_smb(method):
         return _api_json({"ok": False, "error": "未知操作"}, 400)
     except Exception as e:
         return _api_json({"ok": False, "error": str(e)}, 502)
+    finally:
+        _SMB_LIMIT.release()
 
 
 def wan_reachable():
@@ -437,7 +483,29 @@ def serve_nova_api(rel, method):
         return music_api.music_api(op)
     if kind == "ping":
         return _api_json({"ok": True, "fs_root": fs_root(),
-                          "wan": wan_reachable(),
+                          # Keep the liveness probe local and cheap.  WAN
+                          # probing performs several external requests and
+                          # must not block every tablet reconnect.
+                          "wan": None,
                           "hotspot": hotspot_ip(), "answer": answer_ip(),
-                          "local": local_ip(), "ts": int(time.time())})
+                           "local": local_ip(), "ts": int(time.time())})
+    if kind == "system-info":
+        import socket
+        try:
+            from novacore.proxy_engine import PROXY
+            proxy = {"running": bool(PROXY.running), "ip": PROXY.host if PROXY.running else None,
+                     "port": PROXY.port if PROXY.running else None}
+        except Exception:
+            proxy = {"running": False, "ip": None, "port": None}
+        dns = list(cfg("dns_upstreams", []) or [])
+        try:
+            host = socket.gethostname()
+        except Exception:
+            host = ""
+        return _api_json({"ok": True, "hostname": host, "local_ip": local_ip(),
+                          "hotspot_ip": hotspot_ip(), "answer_ip": answer_ip(),
+                          "dns_servers": dns, "proxy": proxy,
+                          "lan_mode": bool(cfg("lan_mode", False)),
+                          "dns_enabled": bool(cfg("dns_enable", True)),
+                          "http_port": cfg("http_port", 80), "ts": int(time.time())})
     return _api_json({"ok": False, "error": "未知端点"}, 404)

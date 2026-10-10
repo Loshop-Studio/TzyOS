@@ -197,7 +197,10 @@ class _ProxyHandler(socketserver.BaseRequestHandler):
                     except ValueError:
                         content_length = None
                 out.append(ln)
-            out.append(b"Connection: keep-alive")
+            # This relay handles independent requests. Keeping upstream HTTP/1.1
+            # connections alive can leave clients waiting for a response boundary
+            # when an upstream omits or misstates its length, so close per request.
+            out.append(b"Connection: close")
             up.sendall(b"\r\n".join(out) + b"\r\n\r\n")
             if rest:
                 up.sendall(rest)

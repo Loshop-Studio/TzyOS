@@ -198,6 +198,11 @@ def create_proxy_app():
             rel = ("/" + path)[len(prefix):]
             # 网页代理：同源改写任意站点（含 HTTPS），供内置浏览器使用
             if rel.startswith("wp/"):
+                # Some older toolbox builds prepend the mount twice when
+                # rewriting an already proxied image/PDF URL. Normalize it at
+                # the backend boundary so those resources remain reachable.
+                while rel.startswith("wp/__nova__/wp/"):
+                    rel = "wp/" + rel[len("wp/__nova__/wp/"):]
                 return serve_web_proxy(rel[3:], request.method)
             # 平板同源系统操作：更新缓存版本号、下载备份 zip（管理端口仅本机可达，故挂这里）
             if rel.startswith("sys/"):
@@ -246,6 +251,19 @@ def create_proxy_app():
                         return jsonify({"ok": False, "error": str(e)}), 404
                     except Exception as e:
                         return jsonify({"ok": False, "error": str(e)}), 500
+                if sub == "restore-catalog" and request.method in ("GET", "HEAD", "POST"):
+                    try:
+                        return jsonify({"ok": True, "backups": toolkit.tablet_backup_catalog()})
+                    except Exception as e:
+                        return jsonify({"ok": False, "error": str(e)}), 500
+                if sub == "restore-package" and request.method in ("GET", "HEAD"):
+                    fp = toolkit.tablet_backup_package(request.args.get("f", ""))
+                    if not fp:
+                        abort(404)
+                    resp = send_file(fp, mimetype="application/zip",
+                                     as_attachment=False, conditional=True)
+                    resp.headers["Cache-Control"] = "no-store"
+                    return resp
                 # 调试模式：平板 console/异常日志回传，按天落 logs/tablet-*.log
                 if sub == "log" and request.method == "POST":
                     body = request.get_json(force=True, silent=True) or {}
@@ -321,6 +339,7 @@ def create_proxy_app():
             return Response("proxy error: %s" % last_err, status=502)
 
         body = resp.content
+        resp.close()
         # 剥除 CSP/XFO：我们注入了引导脚本并在跨源 iframe 中挂载 Tzy OS，
         # 平台一旦下发 script-src/frame-ancestors 限制会直接掐断整个链路。
         out_headers = [(k, v) for k, v in resp.raw.headers.items()
@@ -331,9 +350,10 @@ def create_proxy_app():
 
         injected = False
         full_path = "/" + path
-        if (cfg("inject_enable", True)
+        should_inject = (cfg("inject_enable", True)
                 and full_path.startswith(str(cfg("inject_path_pattern", "/static/js/manifest.build.")))
-                and "javascript" in resp.headers.get("content-type", "").lower()):
+                and "javascript" in resp.headers.get("content-type", "").lower())
+        if should_inject:
             try:
                 # 只注入内容恒定的引导器（~1.5KB）：真正的 loader 与配置由
                 # 挂载点 __boot__.js 动态下发（no-cache，可随时更新），

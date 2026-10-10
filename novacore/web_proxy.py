@@ -26,6 +26,29 @@ WP_MAX_BYTES = 200 * 1024 * 1024   # 二进制下载上限 200MB（对齐 api/we
 WEB_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
           "(KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36")
 
+# Hosts listed here bypass the optional local relay and use direct server egress.
+# service.main() loads config after importing this module, so refresh explicitly
+# once load_config() has populated the shared config dictionary.
+DIRECT_HOSTS = set()
+
+
+def reload_config():
+    global DIRECT_HOSTS
+    DIRECT_HOSTS = set(str(x).strip().lower()
+                       for x in (cfg("webproxy_direct_hosts", []) or [])
+                       if str(x).strip())
+    return set(DIRECT_HOSTS)
+
+# ZhongYu returns several OSS resource URLs as plain HTTP. Alibaba OSS now
+# rejects those legacy requests with 403, while the same object is available
+# over HTTPS. Keep the browser-facing proxy URL stable and upgrade only the
+# upstream request so already-installed application packages start working.
+SCHOOL_OSS_HOSTS = {
+    "ezy-sxz.oss-cn-hangzhou.aliyuncs.com",
+    "ezy-word2html-imgs.oss-cn-hangzhou.aliyuncs.com",
+    "friday-note.oss-cn-hangzhou.aliyuncs.com",
+}
+
 # 剥离：压缩/长度由 Flask 重算；CSP/XFO 会阻断 iframe 与内联改写；
 # 连接类头属逐跳；HSTS/report-to/NEL 与本代理语义冲突（同源外壳是 http 或另一域）；
 # ETag/Last-Modified/Expires/Age/Vary 属缓存协商——配合下方强制 no-store，
@@ -49,6 +72,7 @@ _SKIP_SCHEMES = ("data:", "javascript:", "mailto:", "tel:", "blob:", "about:",
 _PASS_THRU_HEADERS = (
     "User-Agent", "Accept", "Accept-Language", "Accept-Encoding",
     "Content-Type", "Referer", "Origin",
+    "Authorization",
     "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-ch-ua-full-version",
     "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "sec-fetch-user",
     "upgrade-insecure-requests", "dnt", "priority",
@@ -80,6 +104,7 @@ try{
   if(!sch||!host)return;
   var BASE=P+sch+"/"+host;   /* 用于把裸路径映射回代理 */
 
+  var API_HOSTS={"sxz.api.zykj.org":1,"sxzbh.api.zykj.org":1};
   function map(u){
     if(u==null)return u;
     if(typeof u!=="string"){ try{ if(u&&u.url)u=u.url; else return u; }catch(e){ return u; } }
@@ -89,13 +114,16 @@ try{
     /* 已是代理链接 / 外链协议 / 数据类 → 原样 */
     if(low.indexOf("data:")===0||low.indexOf("blob:")===0||low.indexOf("javascript:")===0||
        low.indexOf("mailto:")===0||low.indexOf("about:")===0)return u;
-    if(s.indexOf(P)===0||low.indexOf("//"+location.host.toLowerCase()+P)>=0)return u;
+    /* Absolute URLs may use the configured mount hostname or the LAN IP.
+       The mount path itself is authoritative; never wrap it a second time. */
+    if(s.indexOf(P)===0||low.indexOf(P.toLowerCase())>=0||low.indexOf("//"+location.host.toLowerCase()+P)>=0)return u;
     /* 根相对（/rp/x.js）或页面相对：统一按当前站点基准解析 */
     try{
       var abs=new URL(s, location.href);
       /* 仅当解析后仍指向本挂载点 origin 时才需改写（否则是真正的跨站外链） */
-      if(abs.origin!==location.origin)return u;
+      if(abs.origin!==location.origin && !API_HOSTS[abs.hostname.toLowerCase()])return u;
       if(abs.pathname.indexOf(P)===0)return u;     /* 已在代理路径下 */
+      if(abs.origin!==location.origin)return P+abs.protocol.replace(":","")+"/"+abs.host+abs.pathname+abs.search+abs.hash;
       return BASE+abs.pathname+abs.search+abs.hash;
     }catch(e){ return u; }
   }
@@ -163,7 +191,7 @@ except Exception:
 # 传元组 (15, 120) 时读超时塌成 15s，重站点/风控慢响应（AI 对话首包）会
 # 被误判超时 502。故这里改用单值超时，使连接与读取都拿到同一充足预算；
 # 连接被拒/无路由会由 TCP RST 立即返回，不会真的白等满。
-UP_TIMEOUT = 120
+UP_TIMEOUT = 30
 
 # 出站节流/错峰：所有出站共用同一出口 IP，站点（DeepSeek 等）会按"单一出口 +
 # 高频并发"判定为自动化流量。这里按 host 限制并发数并在请求前加随机抖动，
@@ -500,7 +528,9 @@ def serve_web_proxy(tail, method):
     if _blocked(host):
         return Response("blocked host", status=403, mimetype="text/plain")
 
-    url = "%s://%s/%s" % (scheme, host, path)
+    host_key = host.split(":")[0].lower()
+    upstream_scheme = "https" if scheme == "http" and host_key in SCHOOL_OSS_HOSTS else scheme
+    url = "%s://%s/%s" % (upstream_scheme, host, path)
     qs = request.query_string.decode("latin1", errors="ignore")
     if qs:
         url += "?" + qs
@@ -518,7 +548,10 @@ def serve_web_proxy(tail, method):
     fwd.setdefault("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
     # Referer/Origin 归一：浏览器发来的是含挂载点的本地地址（泄露代理结构且异常），
     # 这里反解回真实上游 URL；同站请求默认补首页 Referer，避免裸奔被风控盯上。
-    fwd["Referer"] = _dewrap_ref(fwd.get("Referer"), scheme, host) or (scheme + "://" + host + "/")
+    if host_key in SCHOOL_OSS_HOSTS:
+        fwd["Referer"] = "http://sxz.school.zykj.org/"
+    else:
+        fwd["Referer"] = _dewrap_ref(fwd.get("Referer"), scheme, host) or (scheme + "://" + host + "/")
     if fwd.get("Origin"):
         fwd["Origin"] = _dewrap_ref(fwd["Origin"] + "/", scheme, host) or fwd["Origin"]
     ck = _cookie_header(scheme, host)      # 还原站点 Cookie，保住登录态
@@ -548,7 +581,7 @@ def serve_web_proxy(tail, method):
         time.sleep(random.uniform(*WP_JITTER))
         up = SESSION.request(
             method, url, headers=fwd, data=body,
-            proxies=PROXY.proxies(),           # http 直转 + https CONNECT 隧道
+            proxies=(None if host_key in DIRECT_HOSTS else PROXY.proxies()),
             timeout=UP_TIMEOUT,
             allow_redirects=False, verify=False, stream=True)
         up_headers = up.headers

@@ -115,6 +115,7 @@
           <div>
             <input type="button" id="btn-play" value="播放" />
             <input type="button" id="btn-pause" value="暂停" />
+            <input type="button" id="btn-reset-gesture" value="重置手势" />
           </div>
         </div>
         <div><strong id="msg-out">初始化...</strong></div>
@@ -151,5 +152,74 @@
       </div>
       <p class="footer">&copy;&nbsp;2020-2024&nbsp;lchz&#104;3473</p>
     </div>
+    <script>
+      (function () {
+        // Do not promote the game to the WebView's native fullscreen layer.
+        // Native fullscreen hides the OS chrome and can capture touch routing.
+        var pseudoFullscreen = null;
+        var fsStyle = document.createElement('style');
+        fsStyle.textContent = '.nv-phi-pseudo-fullscreen{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:1000!important;background:#000!important}';
+        document.head.appendChild(fsStyle);
+        try {
+          Object.defineProperty(document, 'fullscreenElement', {
+            configurable: true,
+            get: function () { return pseudoFullscreen; }
+          });
+          Object.defineProperty(document, 'webkitFullscreenElement', {
+            configurable: true,
+            get: function () { return pseudoFullscreen; }
+          });
+          Object.defineProperty(document, 'fullscreenEnabled', {
+            configurable: true,
+            get: function () { return true; }
+          });
+        } catch (e) {}
+        function fsChange() {
+          try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) {}
+          try { document.dispatchEvent(new Event('webkitfullscreenchange')); } catch (e) {}
+        }
+        function pseudoEnter() {
+          if (pseudoFullscreen) pseudoFullscreen.classList.remove('nv-phi-pseudo-fullscreen');
+          pseudoFullscreen = this;
+          pseudoFullscreen.classList.add('nv-phi-pseudo-fullscreen');
+          fsChange();
+          return Promise.resolve();
+        }
+        function pseudoExit() {
+          if (pseudoFullscreen) pseudoFullscreen.classList.remove('nv-phi-pseudo-fullscreen');
+          pseudoFullscreen = null;
+          fsChange();
+          return Promise.resolve();
+        }
+        try {
+          Element.prototype.requestFullscreen = pseudoEnter;
+          Element.prototype.webkitRequestFullscreen = pseudoEnter;
+          document.exitFullscreen = pseudoExit;
+          document.webkitExitFullscreen = pseudoExit;
+        } catch (e) {}
+
+        var button = document.getElementById('btn-reset-gesture');
+        if (!button) return;
+        button.addEventListener('click', function () {
+          button.disabled = true;
+          try {
+            if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen();
+            if (document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+          } catch (e) {}
+          if (window.OS && typeof window.OS.resetApp === 'function') {
+            window.OS.resetApp('phi');
+          } else if (window.parent && window.parent.OS && typeof window.parent.OS.resetApp === 'function') {
+            window.parent.OS.resetApp('phi');
+          } else if (window.parent) {
+            window.parent.postMessage({ type: 'nv-reset-app', appId: 'phi' }, '*');
+          }
+        });
+        window.addEventListener('message', function (event) {
+          if (event && event.data && event.data.type === 'nv-close') {
+            try { button.disabled = false; } catch (e) {}
+          }
+        });
+      })();
+    </script>
   </body>
 </html>

@@ -31,6 +31,14 @@
   };
   var CFG_KEYS = { ftp: "nova2.ftp", smb: "nova2.smb" };
   var SORT_KEY = "nova2.files.sort";
+  var REMOTE_DIR_TTL = 30000;
+  var remoteDirCache = {};  // 仅当前页面内存；刷新/重开页面即清空
+
+  function remoteConnKey(source, conn) {
+    conn = conn || {};
+    return [source, conn.host || "", conn.port || "", conn.share || "",
+      conn.user || ""].join("|");
+  }
   // 本机可解压的归档格式；rar/7z 需专有解码器，暂不支持（会在操作处明确提示）
   function arcType(name) {
     var n = String(name || "").toLowerCase();
@@ -245,34 +253,65 @@
         throw e;
       });
     }
-    function callList() {
+    function remoteCacheKey(path) {
+      return remoteConnKey(state.source, state.conn) + "|" + (path || "");
+    }
+    function invalidateConnectionCache(source, conn) {
+      if (source !== "ftp" && source !== "smb") return;
+      var prefix = remoteConnKey(source, conn) + "|";
+      Object.keys(remoteDirCache).forEach(function (key) {
+        if (key.indexOf(prefix) === 0) delete remoteDirCache[key];
+      });
+    }
+    function invalidateRemoteCache() {
+      invalidateConnectionCache(state.source, state.conn);
+    }
+    function afterRemoteMutation(p) {
+      return p.then(function (r) {
+        if (r && r.ok) invalidateRemoteCache();
+        return r;
+      });
+    }
+    function callList(force) {
       if (state.source === "vfs") return logCall("list", state.path, OS.vfs.list(state.path));
       if (state.source === "fs") return logCall("list", state.path, OS.api.fs("list", { path: state.path }));
-      if (state.source === "ftp")
-        return logCall("list", state.path, OS.api.ftp(Object.assign({}, state.conn, { op: "list", path: state.path })));
-      return logCall("list", state.path, OS.api.smb(Object.assign({}, state.conn, { op: "list", path: state.path })));
+      var key = remoteCacheKey(state.path);
+      var cached = remoteDirCache[key];
+      if (!force && cached && Date.now() - cached.at < REMOTE_DIR_TTL) {
+        return Promise.resolve({ ok: true, path: state.path,
+          entries: cached.entries.slice(), cached: true });
+      }
+      var req = state.source === "ftp"
+        ? OS.api.ftp(Object.assign({}, state.conn, { op: "list", path: state.path }))
+        : OS.api.smb(Object.assign({}, state.conn, { op: "list", path: state.path }));
+      return logCall("list", state.path, req).then(function (r) {
+        if (r && r.ok) {
+          remoteDirCache[key] = { at: Date.now(), entries: (r.entries || []).slice() };
+        }
+        return r;
+      });
     }
     function callDel(path) {
       if (state.source === "vfs") return logCall("del", path, OS.vfs.del(path));
       if (state.source === "fs") return logCall("del", path, OS.api.fs("del", { path: path }));
       if (state.source === "ftp")
-        return logCall("del", path, OS.api.ftp(Object.assign({}, state.conn, { op: "del", path: path })));
-      return logCall("del", path, OS.api.smb(Object.assign({}, state.conn, { op: "del", path: path })));
+        return afterRemoteMutation(logCall("del", path, OS.api.ftp(Object.assign({}, state.conn, { op: "del", path: path }))));
+      return afterRemoteMutation(logCall("del", path, OS.api.smb(Object.assign({}, state.conn, { op: "del", path: path }))));
     }
     function callMkdir(path) {
       if (state.source === "vfs") return logCall("mkdir", path, OS.vfs.mkdir(path));
       if (state.source === "fs") return logCall("mkdir", path, OS.api.fs("mkdir", { path: path }));
       if (state.source === "ftp")
-        return logCall("mkdir", path, OS.api.ftp(Object.assign({}, state.conn, { op: "mkdir", path: path })));
-      return logCall("mkdir", path, OS.api.smb(Object.assign({}, state.conn, { op: "mkdir", path: path })));
+        return afterRemoteMutation(logCall("mkdir", path, OS.api.ftp(Object.assign({}, state.conn, { op: "mkdir", path: path }))));
+      return afterRemoteMutation(logCall("mkdir", path, OS.api.smb(Object.assign({}, state.conn, { op: "mkdir", path: path }))));
     }
     function callPut(path, b64, name) {
       if (state.source === "vfs")
         return logCall("put", path, OS.vfs.put(path, { data: b64, mime: OS.mimeOf(name), name: name }));
       var body = { op: "put", path: path, data: b64 };
       if (state.source === "fs") return logCall("put", path, OS.api.fs("put", body));
-      if (state.source === "ftp") return logCall("put", path, OS.api.ftp(Object.assign({}, state.conn, body)));
-      return logCall("put", path, OS.api.smb(Object.assign({}, state.conn, body)));
+      if (state.source === "ftp") return afterRemoteMutation(logCall("put", path, OS.api.ftp(Object.assign({}, state.conn, body))));
+      return afterRemoteMutation(logCall("put", path, OS.api.smb(Object.assign({}, state.conn, body))));
     }
     function callGet(path) {
       if (state.source === "vfs") return logCall("get", path, OS.vfs.get(path));
@@ -286,8 +325,8 @@
         return logCall("rename", path, OS.vfs.rename(path, joinPath(parentPath(path), newName)));
       var body = { op: "rename", path: path, newName: newName };
       if (state.source === "fs") return logCall("rename", path, OS.api.fs("rename", body));
-      if (state.source === "ftp") return logCall("rename", path, OS.api.ftp(Object.assign({}, state.conn, body)));
-      return logCall("rename", path, OS.api.smb(Object.assign({}, state.conn, body)));
+      if (state.source === "ftp") return afterRemoteMutation(logCall("rename", path, OS.api.ftp(Object.assign({}, state.conn, body))));
+      return afterRemoteMutation(logCall("rename", path, OS.api.smb(Object.assign({}, state.conn, body))));
     }
     function sourceLabel() {
       return { fs: "电脑", vfs: "离线空间", ftp: "FTP", smb: "SMB 共享" }[state.source];
@@ -590,8 +629,17 @@
     function srcList(p) {
       if (state.source === "vfs") return OS.vfs.list(p);
       if (state.source === "fs") return OS.api.fs("list", { path: p });
-      if (state.source === "ftp") return OS.api.ftp(Object.assign({}, state.conn, { op: "list", path: p }));
-      return OS.api.smb(Object.assign({}, state.conn, { op: "list", path: p }));
+      var key = remoteCacheKey(p), cached = remoteDirCache[key];
+      if (cached && Date.now() - cached.at < REMOTE_DIR_TTL) {
+        return Promise.resolve({ ok: true, path: p, entries: cached.entries.slice(), cached: true });
+      }
+      var req = state.source === "ftp"
+        ? OS.api.ftp(Object.assign({}, state.conn, { op: "list", path: p }))
+        : OS.api.smb(Object.assign({}, state.conn, { op: "list", path: p }));
+      return req.then(function (r) {
+        if (r && r.ok) remoteDirCache[key] = { at: Date.now(), entries: (r.entries || []).slice() };
+        return r;
+      });
     }
     function srcGet(p) {
       if (state.source === "vfs") return OS.vfs.get(p);
@@ -602,8 +650,8 @@
     function srcMkdir(p) {
       if (state.source === "vfs") return OS.vfs.mkdir(p);
       if (state.source === "fs") return OS.api.fs("mkdir", { path: p });
-      if (state.source === "ftp") return OS.api.ftp(Object.assign({}, state.conn, { op: "mkdir", path: p }));
-      return OS.api.smb(Object.assign({}, state.conn, { op: "mkdir", path: p }));
+      if (state.source === "ftp") return afterRemoteMutation(OS.api.ftp(Object.assign({}, state.conn, { op: "mkdir", path: p })));
+      return afterRemoteMutation(OS.api.smb(Object.assign({}, state.conn, { op: "mkdir", path: p })));
     }
     function srcPut(p, rec) {
       if (state.source === "vfs") return OS.vfs.put(p, rec);
@@ -611,8 +659,8 @@
       if (rec.text !== undefined && rec.text !== null) body.content = rec.text;
       else body.data = rec.data;
       if (state.source === "fs") return OS.api.fs("put", body);
-      if (state.source === "ftp") return OS.api.ftp(Object.assign({}, state.conn, body));
-      return OS.api.smb(Object.assign({}, state.conn, body));
+      if (state.source === "ftp") return afterRemoteMutation(OS.api.ftp(Object.assign({}, state.conn, body)));
+      return afterRemoteMutation(OS.api.smb(Object.assign({}, state.conn, body)));
     }
     // 归档内路径安全化：去前导斜杠/反斜杠，拒绝 ".."（zip-slip 防护），非法返回 ""
     function safeRel(rel) {
@@ -914,7 +962,7 @@
     }
 
     /* ---------- 数据操作 ---------- */
-    function refresh() {
+    function refresh(force) {
       if ((state.source === "ftp" || state.source === "smb") && !state.conn) {
         reqId++;
         state.busy = false;
@@ -931,7 +979,7 @@
       state.entries = [];
       render();
       statusLine.textContent = "正在读取" + sourceLabel() + "…";
-      callList().then(function (r) {
+      callList(!!force).then(function (r) {
         if (my !== reqId) return;
         state.busy = false;
         if (r.ok) {
@@ -943,7 +991,8 @@
               extra = " · 电脑外网：" + (info.wan ? "通畅" : "不通");
             }
           }
-          statusLine.textContent = sourceLabel() + " · 共 " + state.entries.length + " 项" + extra;
+          statusLine.textContent = sourceLabel() + " · 共 " + state.entries.length + " 项" +
+            (r.cached ? " · 内存缓存" : "") + extra;
           render();
         } else {
           statusLine.textContent = r.error || "读取失败";
@@ -1083,8 +1132,15 @@
           var putP;
           if (dst.key === "vfs") putP = OS.vfs.put("/" + entry.name, rec);
           else if (dst.key === "fs") putP = OS.api.fs("put", { path: entry.name, data: rec.data, content: rec.text });
-          else if (dst.key === "ftp") putP = OS.api.ftp(Object.assign({}, OS.store.get(CFG_KEYS.ftp, {}), { op: "put", path: entry.name, data: rec.data, content: rec.text }));
-          else putP = OS.api.smb(Object.assign({}, OS.store.get(CFG_KEYS.smb, {}), { op: "put", path: entry.name, data: rec.data, content: rec.text }));
+          else if (dst.key === "ftp") {
+            var ftpConn = OS.store.get(CFG_KEYS.ftp, {});
+            putP = OS.api.ftp(Object.assign({}, ftpConn, { op: "put", path: entry.name, data: rec.data, content: rec.text }))
+              .then(function (out) { if (out && out.ok) invalidateConnectionCache("ftp", ftpConn); return out; });
+          } else {
+            var smbConn = OS.store.get(CFG_KEYS.smb, {});
+            putP = OS.api.smb(Object.assign({}, smbConn, { op: "put", path: entry.name, data: rec.data, content: rec.text }))
+              .then(function (out) { if (out && out.ok) invalidateConnectionCache("smb", smbConn); return out; });
+          }
           putP.then(function (r2) {
             if (r2.ok) { OS.toast("已复制到" + dst.label); statusLine.textContent = "已复制到" + dst.label; }
             else OS.toast(r2.error || (r2.offline ? "服务不可达（离线）" : "写入失败"));
@@ -1490,7 +1546,8 @@
     btnConn.addEventListener("click", openConnDialog);
     btnWeb.addEventListener("click", fetchWeb);
     btnUp.addEventListener("click", function () { state.path = parentPath(state.path); refresh(); });
-    btnRefresh.addEventListener("click", refresh);
+    btnRefresh.title = "忽略 FTP/SMB 目录缓存并重新读取";
+    btnRefresh.addEventListener("click", function () { refresh(true); });
     btnMkdir.addEventListener("click", mkdir);
     btnUpload.addEventListener("click", function () { fileInput.value = ""; fileInput.click(); });
     fileInput.addEventListener("change", function () {

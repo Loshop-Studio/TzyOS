@@ -235,6 +235,41 @@ def tablet_backup_commit(sid):
             "bytes": sess.get("bytes", 0), "zip": os.path.getsize(zip_path)}
 
 
+def tablet_backup_catalog():
+    """列出电脑 backups/tablet 下可供平板还原的 zip。"""
+    os.makedirs(TABLET_BACKUP_DIR, exist_ok=True)
+    items = []
+    for name in os.listdir(TABLET_BACKUP_DIR):
+        if not name.lower().endswith(".zip"):
+            continue
+        fp = os.path.join(TABLET_BACKUP_DIR, name)
+        if not os.path.isfile(fp):
+            continue
+        try:
+            st = os.stat(fp)
+            with zipfile.ZipFile(fp, "r") as z:
+                files = sum(1 for i in z.infolist()
+                            if not i.is_dir() and "/vfs/" in i.filename.replace("\\", "/"))
+            items.append({"name": name, "size": st.st_size,
+                          "mtime": int(st.st_mtime), "files": files})
+        except (OSError, zipfile.BadZipFile):
+            continue
+    items.sort(key=lambda x: x["mtime"], reverse=True)
+    return items
+
+
+def tablet_backup_package(name):
+    """返回目录内指定备份 zip 的绝对路径；非法名称或非 zip 返回 None。"""
+    safe = os.path.basename(str(name or "").strip())
+    if safe != str(name or "").strip() or not safe.lower().endswith(".zip"):
+        return None
+    fp = os.path.abspath(os.path.join(TABLET_BACKUP_DIR, safe))
+    root = os.path.abspath(TABLET_BACKUP_DIR)
+    if os.path.commonpath([fp, root]) != root or not os.path.isfile(fp):
+        return None
+    return fp
+
+
 # ----------------------------- 平板调试日志 -----------------------------
 def append_tablet_log(remote, lines, ua=""):
     """调试模式下平板回传的 console/异常日志，按天落 logs/tablet-YYYYMMDD.log。"""

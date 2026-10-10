@@ -294,6 +294,7 @@
     function mountMedia(blob, entry) {
       var tag = isVideo(entry.name) ? "video" : "audio";
       mediaEl = document.createElement(tag);
+      mediaEl.__nvUnregister = OS.media && OS.media.register ? OS.media.register(mediaEl) : function () {};
       mediaEl.controls = false;
       mediaEl.preload = "auto";
       mediaEl.src = curUrl;
@@ -337,6 +338,7 @@
 
     function stopMedia() {
       if (mediaEl) {
+        try { if (mediaEl.__nvUnregister) mediaEl.__nvUnregister(); } catch (e) { }
         try { mediaEl.pause(); } catch (e) { }
         mediaEl.src = "";
         mediaEl = null;
@@ -391,6 +393,12 @@
       if (!mediaEl) { if (curIdx >= 0) playIdx(curIdx); return; }
       if (playing) { mediaEl.pause(); playing = false; btnPlay.textContent = "▶"; }
       else { mediaEl.play(); playing = true; btnPlay.textContent = "⏸"; }
+    });
+    OS.on("media-pause", function (ev) {
+      if (!mediaEl) return;
+      playing = false;
+      btnPlay.textContent = "\u25b6";
+      if (ev && ev.reason === "headset-removed") infoEl.textContent = "\u8033\u673a\u5df2\u62d4\u51fa\uff0c\u64ad\u653e\u5df2\u6682\u505c";
     });
     btnPrev.addEventListener("click", prev);
     btnNext.addEventListener("click", next);

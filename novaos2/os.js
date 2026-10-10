@@ -37,6 +37,49 @@
     }
   }
 
+  var mediaRegistry = [];
+  var headset = { supported: false, connected: null, checkedAt: 0, probing: null };
+  function registerMedia(el) {
+    if (!el) return function () {};
+    if (mediaRegistry.indexOf(el) < 0) mediaRegistry.push(el);
+    return function () { var i = mediaRegistry.indexOf(el); if (i >= 0) mediaRegistry.splice(i, 1); };
+  }
+  function pauseAllMedia(reason) {
+    var pageMedia = document.querySelectorAll("audio,video");
+    for (var i = 0; i < pageMedia.length; i++) {
+      if (mediaRegistry.indexOf(pageMedia[i]) < 0) mediaRegistry.push(pageMedia[i]);
+    }
+    mediaRegistry = mediaRegistry.filter(function (el) {
+      if (!el || !el.isConnected) return false;
+      try { el.pause(); } catch (e) { }
+      return true;
+    });
+    emit("media-pause", { reason: reason || "manual" });
+  }
+  function detectHeadset() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) { headset.supported = false; return Promise.resolve(headset); }
+    headset.supported = true;
+    if (headset.probing) return headset.probing;
+    headset.probing = navigator.mediaDevices.enumerateDevices().then(function (devices) {
+      var outputs = devices.filter(function (d) { return d.kind === "audiooutput"; });
+      var previous = headset.connected;
+      var hasLabels = outputs.some(function (d) { return !!String(d.label || "").trim(); });
+      var connected = hasLabels ? false : null;
+      outputs.forEach(function (d) { if (/headphone|headset|耳机|bluetooth|airpods|buds|earbud|usb audio/i.test(String(d.label || ""))) connected = true; });
+      if (!outputs.length) connected = null;
+      var changed = headset.connected !== connected;
+      headset.connected = connected; headset.checkedAt = Date.now(); headset.probing = null;
+      if (changed) emit("headset-change", { connected: connected, supported: true });
+      if (previous === true && connected === false) pauseAllMedia("headset-removed");
+      return headset;
+    }, function () { headset.probing = null; return headset; });
+    return headset.probing;
+  }
+  function initMediaMonitor() {
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener("devicechange", detectHeadset);
+    detectHeadset(); setInterval(detectHeadset, 5000);
+  }
+
   /* ---------------- 轻提示 ---------------- */
   var toastTimer = 0;
   function toast(msg, ms) {
@@ -175,7 +218,10 @@
     return i >= 0 ? p.slice(0, i + 1) : "/";
   })();
   var BASE_KEY = "nova2.apiBase";
-  var NET = { base: "", info: null, online: false, probing: null, waiters: [] };
+  var NET = {
+    base: "", info: null, online: false, probing: null, waiters: [],
+    probed: false, nextProbeAt: 0
+  };
 
   function lanCandidates() {
     var cfg = window.__NOVA_LAN__ || {};
@@ -195,7 +241,7 @@
   function pingAt(base) {
     return new Promise(function (resolve) {
       var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
-      var timer = setTimeout(function () { if (ctrl) { try { ctrl.abort(); } catch (e) { } } }, 2500);
+      var timer = setTimeout(function () { if (ctrl) { try { ctrl.abort(); } catch (e) { } } }, 900);
       fetch(base + "api/ping", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -214,8 +260,18 @@
   }
 
   function netProbe(force) {
-    if (NET.base && !force) return Promise.resolve({ base: NET.base, info: NET.info });
     if (NET.probing) return NET.probing;
+    // An empty base is valid for a healthy same-origin mount, so cache the
+    // complete probe result instead of using base as the cache sentinel.
+    if (!force && NET.probed) {
+      if (NET.online) return Promise.resolve({ base: NET.base, info: NET.info });
+      if (NET.nextProbeAt && Date.now() < NET.nextProbeAt) return Promise.resolve(null);
+      // Offline cooldown expired: allow a passive caller to discover that
+      // the service has come back even when WebView emitted no `online` event.
+    }
+    if (force && NET.probed && NET.nextProbeAt && Date.now() < NET.nextProbeAt) {
+      return Promise.resolve(null);
+    }
     NET.probing = (function () {
       // 候选顺序：同源（劫持在）→ 上次成功的直连 → 注入 IP → 固定热点网段
       var list = [""];
@@ -225,19 +281,33 @@
       try { nvLog("debug", "net", "开始探测电脑服务，候选 " + list.length + " 个：" +
         list.map(function (b) { return b || "(同源)"; }).join(", ")); } catch (_) { }
 
-      function next(i) {
-        if (i >= list.length) return Promise.resolve(null);
-        return pingAt(list[i]).then(function (res) { return res || next(i + 1); });
-      }
-      return next(0).then(function (res) {
+      return new Promise(function (resolve) {
+        var left = list.length, done = false;
+        if (!left) { resolve(null); return; }
+        list.forEach(function (base) {
+          pingAt(base).then(function (res) {
+            if (done) return;
+            if (res) { done = true; resolve(res); return; }
+            left--;
+            if (!left) { done = true; resolve(null); }
+          });
+        });
+      }).then(function (res) {
         NET.online = !!res;
+        NET.probed = true;
         if (res) {
           NET.base = res.base;
           NET.info = res.info;
+          NET.nextProbeAt = 0;
           Store.set(BASE_KEY, res.base);
           try { nvLog("info", "net", "电脑服务就绪：" + (res.base || "(同源)") +
             " wan=" + (res.info.wan ? 1 : 0) + " answer=" + res.info.answer); } catch (_) { }
         } else {
+          // Clear stale online state after a failed probe.  Otherwise every
+          // caller keeps retrying an endpoint that is no longer reachable.
+          NET.base = "";
+          NET.info = null;
+          NET.nextProbeAt = Date.now() + 5000;
           try { nvLog("warn", "net", "全部候选不可达，进入离线模式"); } catch (_) { }
         }
         NET.probing = null;
@@ -264,8 +334,21 @@
       dot.title = "电脑服务：" + where + wan;
       dot.textContent = "";
     }
-    try { emit("net-change", { base: NET.base, info: NET.info, offline: !NET.base }); } catch (e) { }
+    try { emit("net-change", { base: NET.base, info: NET.info, offline: !NET.online }); } catch (e) { }
   }
+
+  window.addEventListener("offline", function () {
+    NET.online = false;
+    NET.probed = true;
+    NET.base = "";
+    NET.info = null;
+    NET.nextProbeAt = Date.now() + 5000;
+    netChanged();
+  });
+  window.addEventListener("online", function () {
+    NET.nextProbeAt = 0;
+    netProbe(true);
+  });
 
   function rawCall(base, rel, body) {
     return fetch(base + rel, {
@@ -280,6 +363,9 @@
   }
 
   function netCall(rel, body, tries) {
+    if (NET.probed && !NET.online && NET.nextProbeAt && Date.now() < NET.nextProbeAt) {
+      return Promise.resolve(OFFLINE);
+    }
     var base = NET.base || "";
     return rawCall(base, rel, body).then(function (j) {
       if (j) return j;
@@ -373,7 +459,10 @@
       });
     }
     if (NET.base) return attempt(NET.base, 0);
-    return netProbe(false).then(function (p) { return attempt(p ? p.base : "", 0); });
+    return netProbe(false).then(function (p) {
+      if (!p) return Promise.reject(new Error("offline"));
+      return attempt(p.base, 0);
+    });
   }
 
   var api = {
@@ -381,9 +470,14 @@
     ftp: function (body) { return netCall("api/ftp", body); },
     smb: function (body) { return netCall("api/smb", body); },
     ping: function () { return netCall("api/ping", {}); },
+    systemInfo: function () { return netCall("api/system-info", {}); },
     // 系统维护（走挂载点同源端点，平板与电脑均可调用）
     sysUpdate: function () { return netCall("sys/update", {}); },
     sysLog: function (logs) { return netCall("sys/log", { logs: logs }); },
+    restoreCatalog: function () { return netCall("sys/restore-catalog", {}); },
+    restorePackage: function (name) {
+      return netGetRaw("sys/restore-package?f=" + encodeURIComponent(name));
+    },
     sysBackupUrl: function () {
       if (NET.base) return Promise.resolve(NET.base + "sys/backup");
       return netProbe(false).then(function (p) { return p ? p.base + "sys/backup" : null; });
@@ -411,17 +505,20 @@
   var DEV_KEY = "nova2.dev.token";
   var dev = {
     token: Store.get(DEV_KEY, ""),   // 会话令牌（服务端派发，失效自动重握手）
+    enabled: false,   // 平板本次运行是否临时开启；刷新页面后恢复关闭
     on: false,        // 已与电脑 devmode 服务握手并轮询中
     off: false,       // 电脑端关闭了开发模式（config dev_mode=false）
     wait: 25,         // 长轮询单次挂起秒数（hello 返回）
     looping: false,   // 轮询链已启动（防重复）
     cmds: 0, ok: 0, fail: 0,         // 累计执行统计
     lastAt: 0,        // 最近一次收到命令的时间戳
-    backoff: 0        // 连续失败退避（ms）
+    backoff: 0,       // 连续失败退避（ms）
+    generation: 0, checking: false
   };
 
   function devState() {
-    return { on: dev.on, off: dev.off, token: dev.token, wait: dev.wait,
+    return { enabled: dev.enabled, on: dev.on, off: dev.off,
+             checking: dev.checking, token: dev.token, wait: dev.wait,
              cmds: dev.cmds, ok: dev.ok, fail: dev.fail, lastAt: dev.lastAt };
   }
   function devChanged() { try { emit("dev-change", devState()); } catch (e) { } }
@@ -543,6 +640,7 @@
         lockScreen(); return { ok: true };
 
       case "reload":
+        if (args.op === "-all" || args.all === true) return resetAllSystem();
         setTimeout(function () { location.reload(); }, 400); return { reloading: true };
 
       case "dbg":
@@ -591,7 +689,11 @@
 
   /* 轮询主循环（单链）：无 token → hello 握手；有 token → 长轮询挂起。
    * 断网指数退避（2s→15s）；电脑端关闭开发模式 → 60s 后再试。 */
-  function devLoop() {
+  function devLoop(generation) {
+    if (!dev.enabled || generation !== dev.generation) {
+      dev.looping = false;
+      return;
+    }
     var job = dev.token
       ? devCall("poll", { token: dev.token, wait: dev.wait })
       : netProbe(false).then(function (p) {
@@ -604,6 +706,7 @@
         });
       });
     job.then(function (j) {
+      if (!dev.enabled || generation !== dev.generation) return later(0);
       if (!j) return fail("网络不可达");
       if (j.devoff) {
         if (!dev.off) { dev.off = true; dev.on = false; devChanged(); }
@@ -630,18 +733,88 @@
       try { nvLog("warn", "dev", "开发通道断开（" + why + "），" + dev.backoff + "ms 后重连"); } catch (e) { }
       devChanged(); later(dev.backoff);
     }
-    function later(ms) { setTimeout(devLoop, ms); }
+    function later(ms) {
+      if (!dev.enabled || generation !== dev.generation) {
+        dev.looping = false;
+        return;
+      }
+      setTimeout(function () { devLoop(generation); }, ms);
+    }
   }
 
   function devStart() {
-    if (dev.looping) return;
+    if (!dev.enabled || dev.looping) return;
     dev.looping = true;
-    devLoop();
+    dev.generation++;
+    devLoop(dev.generation);
+  }
+
+  function devWaitOnline(timeout) {
+    var end = Date.now() + (timeout || 8000);
+    return new Promise(function (resolve) {
+      function check() {
+        if (!dev.enabled) { resolve({ ok: false, error: "DevLink 已关闭" }); return; }
+        if (dev.on) { resolve({ ok: true, pong: true, state: devState() }); return; }
+        if (Date.now() >= end) {
+          resolve({ ok: false, error: dev.off ? "电脑端未允许 DevLink" : "DevLink 生效检测超时" });
+          return;
+        }
+        setTimeout(check, 200);
+      }
+      check();
+    });
+  }
+
+  function devEnable() {
+    if (dev.enabled && dev.on) return Promise.resolve({ ok: true, pong: true, state: devState() });
+    dev.checking = true;
+    devChanged();
+    return devCall("control", { enabled: true }).then(function (r) {
+      if (!r || !r.ok || !r.enabled) throw new Error((r && r.error) || "电脑端未能开启 DevLink");
+      dev.enabled = true;
+      dev.off = false;
+      dev.token = "";
+      Store.remove(DEV_KEY);
+      devStart();
+      return devWaitOnline(8000);
+    }).then(function (r) {
+      dev.checking = false;
+      devChanged();
+      return r;
+    }, function (err) {
+      dev.enabled = false;
+      dev.on = false;
+      dev.checking = false;
+      devChanged();
+      return { ok: false, error: (err && err.message) || String(err) };
+    });
+  }
+
+  function devDisable() {
+    dev.enabled = false;
+    dev.on = false;
+    dev.off = false;
+    dev.checking = false;
+    dev.generation++;
+    dev.looping = false;
+    dev.token = "";
+    Store.remove(DEV_KEY);
+    devChanged();
+    return devCall("control", { enabled: false }).then(function (r) {
+      return r && r.ok ? r : { ok: false, error: (r && r.error) || "关闭失败" };
+    });
   }
 
   // 供 devterm 终端应用本地复用（与电脑下发走同一条全权限路由）
   var devApi = {
     state: devState,
+    enable: devEnable,
+    disable: devDisable,
+    check: function () {
+      if (!dev.enabled) return Promise.resolve({ ok: false, error: "请先开启 DevLink" });
+      if (!dev.looping) devStart();
+      return devWaitOnline(5000);
+    },
     exec: function (cmd, args) {
       return Promise.resolve().then(function () { return devExec(cmd, args); });
     }
@@ -1598,12 +1771,14 @@
       if (old.root && old.root.parentNode) {
         try { old.root.parentNode.removeChild(old.root); } catch (e) { }
       }
-      apps[def.id] = { def: def, root: null, inited: false, win: null };
+      apps[def.id] = { def: def, root: null, inited: false, win: null,
+        healthMisses: 0, healthPending: false, healthCrashed: false, lastArg: null };
       if (desktopReady) renderDesktop();
       return;
     }
     if (!def.user) def.builtin = true;
-    apps[def.id] = { def: def, root: null, inited: false, win: null };
+    apps[def.id] = { def: def, root: null, inited: false, win: null,
+      healthMisses: 0, healthPending: false, healthCrashed: false, lastArg: null };
     appOrder.push(def.id);
     if (desktopReady) renderDesktop();
   }
@@ -1980,11 +2155,13 @@
   function openApp(id, arg) {
     var rec = apps[id];
     if (!rec) { nvLog("warn", "app", "openApp 未找到应用：" + id); return; }
+    rec.healthMisses = 0;
+    if (arg !== undefined) rec.lastArg = arg;
     if (rec.win) {
       focusApp(id);
       if (rec.def.onArg) {
         try { rec.def.onArg(rec.root, arg); }
-        catch (e) { nvErr("app", e, "应用 " + id + " onArg 异常"); }
+        catch (e) { rec.healthCrashed = true; nvErr("app", e, "应用 " + id + " onArg 异常"); }
       }
       return;
     }
@@ -1999,8 +2176,12 @@
     if (!rec.inited) {
       rec.inited = true;
       nvLog("info", "app", "首次构建应用：" + id);
-      try { rec.def.open(rec.root, API_FOR_APP); }
-      catch (e) { nvErr("app", e, "应用 " + id + " open/build 崩溃"); }
+      try { rec.def.open(rec.root, API_FOR_APP); rec.healthCrashed = false; }
+      catch (e) { rec.healthCrashed = true; nvErr("app", e, "应用 " + id + " open/build 崩溃"); }
+    }
+    if (!rec.resetHandler) {
+      rec.resetHandler = function () { rebuildApp(id); };
+      rec.root.addEventListener("nv-reset-app", rec.resetHandler);
     }
     rec.root.style.display = "";
 
@@ -2017,7 +2198,29 @@
       border: 0,
       onclose: function () {
         // WinBox close 会把 mount 的节点 unmount 回原父节点
-        try { rec.root.dispatchEvent(new Event("nv-close")); } catch (e) { }
+        try {
+          var fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement;
+          var phiStage = rec.root && rec.root.querySelector && rec.root.querySelector("#stage");
+          if (fullscreenElement && rec.root && (rec.root.contains(fullscreenElement) || (fullscreenElement === document.body && phiStage))) {
+            var exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
+            if (exitFullscreen) exitFullscreen.call(document);
+          }
+          if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+        } catch (e) { }
+        // nv-close is delivered on the OS root; mirror it into embedded
+        // documents so their input proxies can detach window/document hooks.
+        try {
+          var frame = rec.root && rec.root.querySelector && rec.root.querySelector("iframe");
+          var fdoc = frame && frame.contentDocument;
+          if (fdoc) {
+            var FrameEvent = fdoc.defaultView && fdoc.defaultView.Event;
+            fdoc.dispatchEvent(FrameEvent ? new FrameEvent("nv-close") : new Event("nv-close"));
+          }
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "nv-close", appId: id }, "*");
+          }
+        } catch (e) { }
+        try { rec.root.dispatchEvent(new Event("nv-close", { bubbles: true })); } catch (e) { }
         rec.win = null;
         rec.root.style.display = "none";
         if (activeId === id) activeId = null;
@@ -2032,7 +2235,7 @@
     if (rec.def.maximize) { try { wb.maximize(); } catch (e) { } }
     if (rec.def.onArg) {
       try { rec.def.onArg(rec.root, arg); }
-      catch (e) { nvErr("app", e, "应用 " + id + " 首次 onArg 异常"); }
+      catch (e) { rec.healthCrashed = true; nvErr("app", e, "应用 " + id + " 首次 onArg 异常"); }
     }
     // 每次打开（含关闭后复用根节点重开）都广播 nv-open：
     // 根节点只 build 一次，像远程浏览器这种在 nv-close 时释放连接的应用，
@@ -2041,9 +2244,110 @@
     renderDock();
   }
 
+  var appHealthPromptActive = false;
+  function pingApp(id) {
+    var rec = apps[id];
+    if (!rec || !rec.win || !rec.inited || rec.healthCrashed) return Promise.resolve(false);
+    var waits = [];
+    var detail = {
+      at: Date.now(),
+      wait: function (p) { waits.push(Promise.resolve(p)); }
+    };
+    try {
+      rec.root.dispatchEvent(new CustomEvent("nv-ping", { detail: detail }));
+      if (typeof rec.def.ping === "function") waits.push(Promise.resolve(rec.def.ping(rec.root, API_FOR_APP)));
+    } catch (e) {
+      return Promise.resolve(false);
+    }
+    if (!waits.length) waits.push(Promise.resolve(!!(rec.root && rec.root.isConnected)));
+    var probe = Promise.all(waits).then(function (values) {
+      return values.every(function (value) { return value !== false; });
+    }, function () { return false; });
+    return Promise.race([
+      probe,
+      new Promise(function (resolve) { setTimeout(function () { resolve(false); }, 4000); })
+    ]);
+  }
+
+  function rebuildApp(id) {
+    var rec = apps[id];
+    if (!rec) return;
+    var arg = rec.lastArg;
+    if (rec.win) { try { rec.win.close(); } catch (e) { } }
+    if (rec.root) {
+      try { rec.root.dispatchEvent(new Event("nv-destroy")); } catch (e) { }
+      if (rec.resetHandler) {
+        try { rec.root.removeEventListener("nv-reset-app", rec.resetHandler); } catch (e) { }
+      }
+      if (rec.root.parentNode) rec.root.parentNode.removeChild(rec.root);
+    }
+    rec.root = null;
+    rec.win = null;
+    rec.inited = false;
+    rec.healthMisses = 0;
+    rec.healthPending = false;
+    rec.healthCrashed = false;
+    nvLog("warn", "app", "重建应用实例：" + id);
+    setTimeout(function () { openApp(id, arg); }, 50);
+  }
+
+  function appWatchdogTick() {
+    runningList().forEach(function (id) {
+      var rec = apps[id];
+      if (!rec || rec.healthPending) return;
+      rec.healthPending = true;
+      pingApp(id).then(function (ok) {
+        rec.healthPending = false;
+        rec.healthMisses = ok ? 0 : (rec.healthMisses || 0) + 1;
+        if (ok || rec.healthMisses < 2 || appHealthPromptActive || !rec.win) return;
+        appHealthPromptActive = true;
+        dlg.confirm("应用“" + rec.def.name + "”无响应，重建会丢失未保存内容，继续？", "应用无响应")
+          .then(function (yes) {
+            appHealthPromptActive = false;
+            if (yes) rebuildApp(id);
+            else rec.healthMisses = 0;
+          }, function (err) {
+            appHealthPromptActive = false;
+            rec.healthMisses = 0;
+            nvErr("app", err, "应用无响应确认框异常：" + id);
+          });
+      });
+    });
+  }
+
   function closeApp(id) {
     var rec = apps[id];
     if (rec && rec.win) { try { rec.win.close(); } catch (e) { } }
+  }
+
+  function resetApp(id) {
+    if (apps[id]) rebuildApp(id);
+  }
+
+  // Full recovery resets the live OS and system settings without deleting
+  // installed software, VFS data, or browser-managed page caches.
+  function resetAllSystem() {
+    var ids = appOrder.slice();
+    ids.forEach(function (id) {
+      var rec = apps[id];
+      if (!rec) return;
+      try { if (rec.win) rec.win.close(); } catch (e) { }
+      try { if (rec.root) rec.root.dispatchEvent(new Event("nv-destroy")); } catch (e) { }
+      try { if (rec.root && rec.root.parentNode) rec.root.parentNode.removeChild(rec.root); } catch (e) { }
+      clearPkgUrls(id);
+    });
+    // Keep app registry and package files. Reset only volatile/system config.
+    [UI_KEY, BASE_KEY, DEV_KEY, DEBUG_KEY, PIN_KEY,
+      "nova2.lock", "nova2.net", "nova2.settings"].forEach(function (key) {
+      try { Store.remove(key); } catch (e) { }
+    });
+    apps = {};
+    appOrder = [];
+    activeId = null;
+    setTimeout(function () { location.reload(); }, 250);
+    return Promise.resolve({ ok: true, reloading: true, softwareReset: false,
+      preserved: "installed-apps,app-registry,vfs-personal-files,browser-cache",
+      reset: "running-apps,watchdog,system-settings" });
   }
 
   function minimizeApp(id) {
@@ -2347,7 +2651,9 @@
   var API_FOR_APP = null;   // boot 时构造
 
   /* ---------------- 启动 ---------------- */
+  var booting = false;
   function boot() {
+    if (booting || (window.OS && window.OS.__booted)) return;
     if (!window.WinBox) {
       var w = document.createElement("div");
       w.style.cssText = "position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;z-index:999";
@@ -2355,6 +2661,7 @@
       document.body.appendChild(w);
       return;
     }
+    booting = true;
 
     iconsEl = document.getElementById("nv-icons");
     dockEl = document.getElementById("nv-dock");
@@ -2365,6 +2672,10 @@
     API_FOR_APP = {
       store: Store,
       api: api,
+      media: {
+        register: registerMedia, pauseAll: pauseAllMedia,
+        headset: function () { return Object.assign({}, headset); }, refreshHeadset: detectHeadset
+      },
       net: {
         probe: netProbe,
         getWeb: netGetWeb,
@@ -2400,6 +2711,7 @@
       h: h,
       clear: clear,
       openApp: openApp,
+      resetApp: resetApp,
       closeApp: closeApp,
       minimizeApp: minimizeApp,
       apps: appList,
@@ -2441,6 +2753,8 @@
     });
     netChanged();   // 初始网络灯（探测完成前为“离线/探测中”灰灯）
 
+    initMediaMonitor();
+    setInterval(appWatchdogTick, 15000);
     desktopReady = true;
     renderDesktop();
     renderDock();
@@ -2458,13 +2772,18 @@
     // 后台预热：判定劫持同源 / 热点直连 / 完全离线，供文件应用即时使用
     setTimeout(function () { netProbe(false); }, 800);
 
-    // 开发模式：桌面就绪后启动 DevLink 长轮询链（电脑可随时接入下发命令）
-    setTimeout(devStart, 1200);
+    // DevLink 默认关闭，仅由设置页在本次运行中临时开启。
   }
 
   // nova.html 末尾会调用 OS.boot()；此处兜底（脚本顺序变化时也能启动）
   // 先暴露引导对象：应用脚本（os.js 之后加载）用 OS.registerApp 注册
-  window.OS = { boot: boot, registerApp: registerApp, __booted: false };
+  window.addEventListener("message", function (event) {
+    var data = event && event.data;
+    if (!data || data.type !== "nv-reset-app" || data.appId !== "phi") return;
+    resetApp("phi");
+  });
+  window.OS = { boot: boot, registerApp: registerApp, resetApp: resetApp,
+    resetAll: resetAllSystem, __booted: false };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
       if (!window.OS.__booted) boot();

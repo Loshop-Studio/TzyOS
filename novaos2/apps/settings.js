@@ -107,6 +107,61 @@
     OS.on("net-change", refreshNet);
     refreshNet();
 
+    var cardInfo = OS.h("div", "nv-set-card");
+    cardInfo.appendChild(OS.h("h4", "", "\u7cfb\u7edf\u72b6\u6001"));
+    var infoRows = {};
+    var infoLabels = {
+      battery: "\u7535\u91cf", wifi: "Wi-Fi / \u7f51\u7edc", dns: "DNS \u670d\u52a1\u5668", ip: "\u672c\u673a IP",
+      computer: "\u7535\u8111\u670d\u52a1 / \u4ee3\u7406", proxy: "\u51fa\u7ad9\u4ee3\u7406", hostname: "\u7535\u8111\u540d\u79f0",
+      hotspot: "\u70ed\u70b9 / \u5e94\u7b54\u5730\u5740", service: "\u670d\u52a1\u914d\u7f6e", volume: "\u7cfb\u7edf\u97f3\u91cf",
+      headset: "\u8033\u673a", browser: "\u6d4f\u89c8\u5668", screen: "\u5c4f\u5e55", storage: "\u672c\u5730\u5b58\u50a8"
+    };
+    Object.keys(infoLabels).forEach(function (key) {
+      var row = OS.h("div", "nv-set-row");
+      row.appendChild(OS.h("span", "nv-set-k", infoLabels[key]));
+      var value = OS.h("span", "nv-set-v", "\u52a0\u8f7d\u4e2d...");
+      row.appendChild(value);
+      cardInfo.appendChild(row);
+      infoRows[key] = value;
+    });
+    var infoBtnRow = OS.h("div", "nv-set-row");
+    var infoBtnBox = OS.h("span", "nv-set-v");
+    var btnInfo = OS.h("button", "nv-btn", "\u5237\u65b0\u72b6\u6001");
+    infoBtnBox.appendChild(btnInfo);
+    infoBtnRow.appendChild(infoBtnBox);
+    cardInfo.appendChild(infoBtnRow);
+    page.appendChild(cardInfo);
+    function safeText(value, fallback) { return value === undefined || value === null || value === "" ? (fallback || "\u4e0d\u53ef\u7528") : String(value); }
+    function refreshSystemInfo() {
+      Object.keys(infoRows).forEach(function (key) { infoRows[key].textContent = "\u52a0\u8f7d\u4e2d..."; });
+      var batteryP = navigator.getBattery ? navigator.getBattery().catch(function () { return null; }) : Promise.resolve(null);
+      var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      var headsetP = OS.media && OS.media.refreshHeadset ? OS.media.refreshHeadset() : Promise.resolve(OS.media && OS.media.headset ? OS.media.headset() : null);
+      var storageP = navigator.storage && navigator.storage.estimate ? navigator.storage.estimate().catch(function () { return null; }) : Promise.resolve(null);
+      Promise.all([batteryP, OS.api.systemInfo().catch(function () { return null; }), headsetP, storageP]).then(function (parts) {
+        var battery = parts[0], server = parts[1], hs = parts[2], storage = parts[3];
+        var netDetail = conn && conn.effectiveType ? conn.effectiveType : "\u5df2\u8fde\u63a5";
+        if (conn && conn.downlink) netDetail += " / " + conn.downlink + " Mbps";
+        if (conn && conn.rtt) netDetail += " / " + conn.rtt + " ms";
+        infoRows.battery.textContent = battery ? Math.round(battery.level * 100) + "%" + (battery.charging ? " (\u5145\u7535\u4e2d)" : "") : "\u4e0d\u53ef\u7528";
+        infoRows.wifi.textContent = navigator.onLine ? netDetail : "\u672a\u8fde\u63a5";
+        infoRows.dns.textContent = server && server.dns_servers && server.dns_servers.length ? server.dns_servers.join(", ") : "\u4e0d\u53ef\u7528";
+        infoRows.ip.textContent = server ? safeText(server.local_ip) : "\u4e0d\u53ef\u7528";
+        infoRows.computer.textContent = server && server.ok ? "\u5df2\u8fde\u63a5 " + safeText(server.local_ip) + ":" + safeText(server.http_port) : "\u672a\u8fde\u63a5";
+        infoRows.proxy.textContent = server && server.proxy && server.proxy.running ? "\u5df2\u8fd0\u884c " + safeText(server.proxy.ip) + ":" + safeText(server.proxy.port) : "\u672a\u8fd0\u884c";
+        infoRows.hostname.textContent = server ? safeText(server.hostname) : "\u4e0d\u53ef\u7528";
+        infoRows.hotspot.textContent = server ? safeText(server.hotspot_ip) + " / " + safeText(server.answer_ip) : "\u4e0d\u53ef\u7528";
+        infoRows.service.textContent = server && server.ok ? "LAN " + (server.lan_mode ? "on" : "off") + " / DNS " + (server.dns_enabled ? "on" : "off") : "\u4e0d\u53ef\u7528";
+        infoRows.volume.textContent = "\u6d4f\u89c8\u5668\u65e0\u6743\u8bfb\u53d6";
+        infoRows.headset.textContent = hs && hs.connected === true ? "\u5df2\u63d2\u5165" : (hs && hs.connected === false ? "\u672a\u63d2\u5165" : "\u65e0\u6cd5\u786e\u8ba4");
+        infoRows.browser.textContent = navigator.userAgent || "\u4e0d\u53ef\u7528";
+        infoRows.screen.textContent = window.screen ? window.screen.width + " x " + window.screen.height : "\u4e0d\u53ef\u7528";
+        infoRows.storage.textContent = storage && storage.usage !== undefined ? fmtBytes(storage.usage) + " / " + fmtBytes(storage.quota) : "\u4e0d\u53ef\u7528";
+      });
+    }
+    btnInfo.addEventListener("click", refreshSystemInfo);
+    root.addEventListener("nv-open", refreshSystemInfo);
+
     /* ---------- 离线空间 ---------- */
     var cardVfs = OS.h("div", "nv-set-card");
     cardVfs.appendChild(OS.h("h4", "", "离线空间（本机存储）"));
@@ -176,25 +231,57 @@
     });
     refreshUsage();
 
-    /* ---------- 系统维护（更新 / 备份，走电脑端挂载点同源接口） ---------- */
+    /* ---------- 系统维护（更新 / DevLink / 备份还原） ---------- */
     var cardSys = OS.h("div", "nv-set-card");
     cardSys.appendChild(OS.h("h4", "", "系统维护"));
     var rowSysBtn = OS.h("div", "nv-set-row");
     var spSys = OS.h("span", "nv-set-v");
     var btnSysUpdate = OS.h("button", "nv-btn", "立即更新");
-    var btnSysBackup = OS.h("button", "nv-btn", "下载电脑端备份");
-    var btnTabBackup = OS.h("button", "nv-btn primary", "备份平板文件到电脑");
     spSys.appendChild(btnSysUpdate);
-    spSys.appendChild(document.createTextNode(" "));
-    spSys.appendChild(btnSysBackup);
-    spSys.appendChild(document.createTextNode(" "));
-    spSys.appendChild(btnTabBackup);
     rowSysBtn.appendChild(spSys);
     cardSys.appendChild(rowSysBtn);
+
+    var rowDev = OS.h("div", "nv-set-row");
+    rowDev.appendChild(OS.h("span", "nv-set-k", "（DevLink）开发模式"));
+    var devBox = OS.h("span", "nv-set-v");
+    var devStatus = OS.h("span", "", "已关闭");
+    var cbDev = document.createElement("input");
+    cbDev.type = "checkbox";
+    cbDev.className = "nv-checkbox";
+    var btnDevCheck = OS.h("button", "nv-btn", "检测");
+    devBox.appendChild(devStatus);
+    devBox.appendChild(document.createTextNode(" "));
+    devBox.appendChild(cbDev);
+    devBox.appendChild(document.createTextNode(" "));
+    devBox.appendChild(btnDevCheck);
+    rowDev.appendChild(devBox);
+    cardSys.appendChild(rowDev);
+
+    var rowBackupMode = OS.h("div", "nv-set-row");
+    rowBackupMode.appendChild(OS.h("span", "nv-set-k", "备份还原模式"));
+    var backupModeBox = OS.h("span", "nv-set-v");
+    var cbBackupMode = document.createElement("input");
+    cbBackupMode.type = "checkbox";
+    cbBackupMode.className = "nv-checkbox";
+    backupModeBox.appendChild(cbBackupMode);
+    rowBackupMode.appendChild(backupModeBox);
+    cardSys.appendChild(rowBackupMode);
+
+    var backupPanel = OS.h("div", "nv-set-backup-panel");
+    backupPanel.style.display = "none";
+    var rowBackupBtn = OS.h("div", "nv-set-row");
+    var spBackup = OS.h("span", "nv-set-v");
+    var btnSysBackup = OS.h("button", "nv-btn", "下载电脑端备份");
+    var btnTabBackup = OS.h("button", "nv-btn primary", "备份平板文件到电脑");
+    spBackup.appendChild(btnSysBackup);
+    spBackup.appendChild(document.createTextNode(" "));
+    spBackup.appendChild(btnTabBackup);
+    rowBackupBtn.appendChild(spBackup);
+    backupPanel.appendChild(rowBackupBtn);
     var vTabProg = OS.h("span", "nv-set-v", "");
     var rowTabProg = OS.h("div", "nv-set-row");
     rowTabProg.appendChild(vTabProg);
-    cardSys.appendChild(rowTabProg);
+    backupPanel.appendChild(rowTabProg);
     /* 音乐歌单单独备份（仅歌单元数据 / 含已下载歌曲） */
     var rowMusicBtn = OS.h("div", "nv-set-row");
     var spMusic = OS.h("span", "nv-set-v");
@@ -204,11 +291,30 @@
     spMusic.appendChild(document.createTextNode(" "));
     spMusic.appendChild(btnMusicPlAudio);
     rowMusicBtn.appendChild(spMusic);
-    cardSys.appendChild(rowMusicBtn);
+    backupPanel.appendChild(rowMusicBtn);
     var vMusicProg = OS.h("span", "nv-set-v", "");
     var rowMusicProg = OS.h("div", "nv-set-row");
     rowMusicProg.appendChild(vMusicProg);
-    cardSys.appendChild(rowMusicProg);
+    backupPanel.appendChild(rowMusicProg);
+
+    var rowRestore = OS.h("div", "nv-set-row");
+    rowRestore.appendChild(OS.h("span", "nv-set-k", "从电脑还原"));
+    var restoreBox = OS.h("span", "nv-set-v");
+    var restoreSelect = document.createElement("select");
+    restoreSelect.className = "nv-input nv-restore-select";
+    var btnRestoreRefresh = OS.h("button", "nv-btn", "刷新列表");
+    var btnRestore = OS.h("button", "nv-btn primary", "还原所选 ZIP");
+    restoreBox.appendChild(restoreSelect);
+    restoreBox.appendChild(document.createTextNode(" "));
+    restoreBox.appendChild(btnRestoreRefresh);
+    restoreBox.appendChild(document.createTextNode(" "));
+    restoreBox.appendChild(btnRestore);
+    rowRestore.appendChild(restoreBox);
+    backupPanel.appendChild(rowRestore);
+    var rowRestoreProg = OS.h("div", "nv-set-row");
+    var vRestoreProg = OS.h("span", "nv-set-v", "");
+    rowRestoreProg.appendChild(vRestoreProg);
+    backupPanel.appendChild(rowRestoreProg);
     // 调试模式开关
     var rowDbg = OS.h("div", "nv-set-row");
     rowDbg.appendChild(OS.h("span", "nv-set-k", "调试模式"));
@@ -226,8 +332,84 @@
       "备份平板文件到电脑：把平板离线空间全部文件（含设置）发送到电脑 backups/tablet/ 目录并打包 zip。 " +
       "备份音乐歌单：只把音乐广场里的歌单与收藏记录备份到电脑；「备份歌单+歌曲」会连同「音乐」文件夹中已下载的音频一起发送。 " +
       "调试模式：开启后平板全部功能日志、网络请求与报错会同时写入离线空间「/日志/tablet-日期.log」并实时回传电脑 logs/tablet-日期.log；电脑端服务自身日志在 logs/server-日期.log（由电脑配置 debug 开关控制）。");
-    cardSys.appendChild(sysHint);
+    backupPanel.appendChild(sysHint);
+    cardSys.appendChild(backupPanel);
     page.appendChild(cardSys);
+
+    function renderDevState() {
+      var st = OS.dev.state();
+      cbDev.checked = !!st.enabled;
+      if (st.checking) devStatus.textContent = "正在检测…";
+      else if (!st.enabled) devStatus.textContent = "已关闭（刷新后保持关闭）";
+      else if (st.on) devStatus.textContent = "已连接 · 生效检测通过";
+      else if (st.off) devStatus.textContent = "电脑端未允许";
+      else devStatus.textContent = "正在连接…";
+    }
+    function finishDevAction(r, enabling) {
+      cbDev.disabled = false;
+      btnDevCheck.disabled = false;
+      renderDevState();
+      if (r && r.ok) {
+        OS.toast(enabling ? "DevLink 已临时开启，检测通过" : "DevLink 已关闭");
+      } else {
+        if (enabling) cbDev.checked = false;
+        OS.toast((r && r.error) || "DevLink 操作失败");
+      }
+    }
+    cbDev.addEventListener("change", function () {
+      cbDev.disabled = true;
+      btnDevCheck.disabled = true;
+      devStatus.textContent = cbDev.checked ? "正在开启并检测…" : "正在关闭…";
+      var enabling = cbDev.checked;
+      (enabling ? OS.dev.enable() : OS.dev.disable()).then(function (r) {
+        finishDevAction(r, enabling);
+      }, function (err) {
+        finishDevAction({ ok: false, error: (err && err.message) || String(err) }, enabling);
+      });
+    });
+    btnDevCheck.addEventListener("click", function () {
+      btnDevCheck.disabled = true;
+      devStatus.textContent = "正在检测…";
+      OS.dev.check().then(function (r) {
+        btnDevCheck.disabled = false;
+        renderDevState();
+        OS.toast(r && r.ok ? "DevLink 生效检测通过" : ((r && r.error) || "检测失败"));
+      });
+    });
+    OS.on("dev-change", renderDevState);
+    renderDevState();
+
+    function refreshRestoreCatalog() {
+      btnRestoreRefresh.disabled = true;
+      btnRestore.disabled = true;
+      restoreSelect.innerHTML = "";
+      restoreSelect.appendChild(new Option("正在读取电脑备份…", ""));
+      return OS.api.restoreCatalog().then(function (r) {
+        btnRestoreRefresh.disabled = false;
+        restoreSelect.innerHTML = "";
+        var list = r && r.ok ? (r.backups || []) : [];
+        if (!list.length) {
+          restoreSelect.appendChild(new Option((r && r.error) || "没有可还原的 ZIP", ""));
+          btnRestore.disabled = true;
+          return;
+        }
+        list.forEach(function (item) {
+          var when = item.mtime ? new Date(item.mtime * 1000).toLocaleString() : "";
+          restoreSelect.appendChild(new Option(item.name + " · " + item.files + " 项 · " +
+            fmtBytes(item.size) + (when ? " · " + when : ""), item.name));
+        });
+        btnRestore.disabled = false;
+      }, function (err) {
+        btnRestoreRefresh.disabled = false;
+        restoreSelect.innerHTML = "";
+        restoreSelect.appendChild(new Option("读取失败：" + ((err && err.message) || err), ""));
+      });
+    }
+    cbBackupMode.addEventListener("change", function () {
+      backupPanel.style.display = cbBackupMode.checked ? "" : "none";
+      if (cbBackupMode.checked) refreshRestoreCatalog();
+    });
+    btnRestoreRefresh.addEventListener("click", refreshRestoreCatalog);
 
     btnSysUpdate.addEventListener("click", function () {
       btnSysUpdate.disabled = true;
@@ -355,6 +537,167 @@
     }
     btnMusicPl.addEventListener("click", function () { doMusicBackup(false, btnMusicPl); });
     btnMusicPlAudio.addEventListener("click", function () { doMusicBackup(true, btnMusicPlAudio); });
+
+    function askRestoreConflict(name) {
+      return new Promise(function (resolve) {
+        var mask = OS.h("div", "nv-mask nv-modal-top");
+        var box = OS.h("div", "nv-dialog");
+        box.appendChild(OS.h("h3", "", "发现同名内容"));
+        box.appendChild(OS.h("div", "nv-dialog-msg", "“" + name + "”已经存在。"));
+        var allLabel = document.createElement("label");
+        allLabel.className = "nv-restore-all";
+        var all = document.createElement("input");
+        all.type = "checkbox";
+        all.className = "nv-checkbox";
+        allLabel.appendChild(all);
+        allLabel.appendChild(document.createTextNode(" 对所有相同情况都进行此操作"));
+        box.appendChild(allLabel);
+        var actions = OS.h("div", "nv-dialog-actions");
+        var skip = OS.h("button", "nv-btn ghost", "跳过");
+        var overwrite = OS.h("button", "nv-btn primary", "覆盖");
+        actions.appendChild(skip);
+        actions.appendChild(overwrite);
+        box.appendChild(actions);
+        mask.appendChild(box);
+        function done(action) {
+          if (mask.parentNode) mask.parentNode.removeChild(mask);
+          resolve({ action: action, all: all.checked });
+        }
+        skip.addEventListener("click", function () { done("skip"); });
+        overwrite.addEventListener("click", function () { done("overwrite"); });
+        document.body.appendChild(mask);
+      });
+    }
+
+    function restoreTabletBackup(name) {
+      var conflictAction = "";
+      var restored = 0, skipped = 0;
+      function conflict(label) {
+        if (conflictAction) return Promise.resolve(conflictAction);
+        return askRestoreConflict(label).then(function (r) {
+          if (r.all) conflictAction = r.action;
+          return r.action;
+        });
+      }
+      function exists(path) {
+        return OS.vfs.get(path).then(function (r) { return !!(r && r.ok); });
+      }
+      function restoreStorage(text) {
+        var snap = JSON.parse(text || "{}");
+        var keys = Object.keys(snap).filter(function (key) { return key.indexOf("nova2.") === 0; });
+        var i = 0;
+        function next() {
+          if (i >= keys.length) return Promise.resolve();
+          var key = keys[i++];
+          var current = null;
+          try { current = localStorage.getItem(key); } catch (e) { }
+          var decide = current === null ? Promise.resolve("overwrite") : conflict("设置 " + key);
+          return decide.then(function (action) {
+            if (action === "overwrite") {
+              localStorage.setItem(key, String(snap[key]));
+              restored++;
+            } else skipped++;
+            return next();
+          });
+        }
+        return next();
+      }
+      function restoreMusicPlaylists(item) {
+        if (!item) return Promise.resolve();
+        return item.entry.async("string").then(function (text) {
+          var current = null;
+          try { current = localStorage.getItem("nova2.music.playlists"); } catch (e) { }
+          return (current === null ? Promise.resolve("overwrite") : conflict("音乐歌单"))
+            .then(function (action) {
+              if (action === "overwrite") {
+                localStorage.setItem("nova2.music.playlists", text);
+                restored++;
+              } else skipped++;
+            });
+        });
+      }
+      vRestoreProg.textContent = "正在下载 " + name + "…";
+      return OS.api.restorePackage(name).then(function (r) {
+        if (!r || !r.ok || !r.blob) throw new Error((r && r.error) || "备份下载失败");
+        if (!window.JSZip) throw new Error("ZIP 组件未加载");
+        vRestoreProg.textContent = "正在读取 ZIP…";
+        return window.JSZip.loadAsync(r.blob);
+      }).then(function (zip) {
+        var items = [];
+        Object.keys(zip.files).forEach(function (rawName) {
+          var entry = zip.files[rawName];
+          if (entry.dir) return;
+          var clean = String(rawName).replace(/\\/g, "/");
+          var marker = clean.indexOf("/vfs/");
+          var rel = marker >= 0 ? clean.slice(marker + 5) :
+            (clean.indexOf("vfs/") === 0 ? clean.slice(4) : "");
+          if (!rel || rel.indexOf("..") >= 0 || rel.charAt(0) === "/") return;
+          items.push({ rel: rel, entry: entry });
+        });
+        if (!items.length) throw new Error("所选 ZIP 不是有效的平板备份");
+        var storageItem = null, musicPlaylistsItem = null;
+        items = items.filter(function (item) {
+          if (item.rel === ".tzy-localstorage.json") { storageItem = item; return false; }
+          if (item.rel === "音乐歌单.json") { musicPlaylistsItem = item; return false; }
+          return true;
+        });
+        var index = 0;
+        function nextFile() {
+          if (index >= items.length) {
+            var tail = storageItem
+              ? storageItem.entry.async("string").then(restoreStorage) : Promise.resolve();
+            return tail.then(function () { return restoreMusicPlaylists(musicPlaylistsItem); });
+          }
+          var item = items[index++];
+          var path = "/" + item.rel;
+          vRestoreProg.textContent = "还原中 " + index + "/" + items.length + "：" + item.rel;
+          return exists(path).then(function (present) {
+            return present ? conflict(path) : "overwrite";
+          }).then(function (action) {
+            if (action === "skip") { skipped++; return nextFile(); }
+            var mime = OS.mimeOf(item.rel);
+            var text = /^text\//.test(mime) || /\/(json|javascript|xml)$/.test(mime);
+            return item.entry.async(text ? "string" : "base64").then(function (content) {
+              return OS.vfs.put(path, text
+                ? { name: item.rel.split("/").pop(), mime: mime, text: content }
+                : { name: item.rel.split("/").pop(), mime: mime, data: content });
+            }).then(function (put) {
+              if (!put || put.ok === false) throw new Error((put && put.error) || ("写入失败：" + path));
+              restored++;
+              return nextFile();
+            });
+          });
+        }
+        return nextFile();
+      }).then(function () {
+        vRestoreProg.textContent = "还原完成：" + restored + " 项，跳过 " + skipped + " 项";
+        OS.log("restore", "从 " + name + " 还原完成：写入=" + restored + " 跳过=" + skipped);
+        refreshUsage();
+        return OS.dlg.alert("还原完成。已写入 " + restored + " 项，跳过 " + skipped +
+          " 项。重新打开页面后，应用和设置会完整生效。", "备份还原");
+      });
+    }
+
+    btnRestore.addEventListener("click", function () {
+      var name = restoreSelect.value;
+      if (!name) { OS.toast("请选择备份 ZIP"); return; }
+      OS.dlg.confirm("将从“" + name + "”还原平板文件和设置。遇到同名内容时会询问覆盖或跳过。继续？",
+        "从备份还原").then(function (yes) {
+        if (!yes) return;
+        btnRestore.disabled = true;
+        btnRestoreRefresh.disabled = true;
+        restoreTabletBackup(name).then(function () {
+          btnRestore.disabled = false;
+          btnRestoreRefresh.disabled = false;
+        }, function (err) {
+          btnRestore.disabled = false;
+          btnRestoreRefresh.disabled = false;
+          vRestoreProg.textContent = "还原失败：" + ((err && err.message) || err);
+          OS.logerr("restore", err, "备份还原失败 " + name);
+          OS.toast("还原失败：" + ((err && err.message) || err));
+        });
+      });
+    });
 
     /* 调试模式：立即生效；开启后 console/报错回传电脑并写离线空间 /日志/ */
     cbDbg.addEventListener("change", function () {

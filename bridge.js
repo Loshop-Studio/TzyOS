@@ -110,6 +110,8 @@
         var PF_KEY = "__nova_pfv__";
         function bridgePrefetch() {
             try {
+                // Prefetch is optional; skip it when the WebView is offline.
+                if (navigator.onLine === false) return;
                 fetch("__filelist__.json", { cache: "no-cache" })
                     .then(function (r) { return r.json(); })
                     .then(function (man) {
@@ -119,6 +121,7 @@
                         if (done === String(man.version)) return;
                         var i = 0, BATCH = 6;
                         (function pump() {
+                            if (navigator.onLine === false) return;
                             if (i >= man.files.length) {
                                 try { localStorage.setItem(PF_KEY, String(man.version)); } catch (e) { }
                                 return;

@@ -15,7 +15,8 @@ rem     dist\TzyOS.zip     same tree zipped (Optimal), for transfer
 rem
 rem  Usage:
 rem     build_all.bat        build runtime if missing, assemble, zip
-rem     build_all.bat /nort  skip runtime check (runtime already built)
+rem     build_all.bat /nort       skip runtime check (runtime already built)
+rem     build_all.bat /repoall    include every historical app package
 rem
 rem  Loshop & Cpt
 rem ============================================================
@@ -46,7 +47,7 @@ if exist "%PKG%" rmdir /s /q "%PKG%"
 mkdir "%PKG%"
 
 rem dirs: server package / source package / pages / admin / apps / runtime / tools
-for %%D in (novacore novelsrc novaos2 admin apps_repo runtime tools) do (
+for %%D in (novacore novelsrc novaos2 admin runtime tools) do (
     robocopy "%%D" "%PKG%\%%D" /E /XD __pycache__ .git /XF *.pyc *.log /NFL /NDL /NJH /NJS /NP >nul
     if errorlevel 8 (
         echo [!] robocopy failed on %%D
@@ -55,9 +56,41 @@ for %%D in (novacore novelsrc novaos2 admin apps_repo runtime tools) do (
     )
 )
 
+rem ---- app repository: ship latest package per app by default ----
+rem Historical .tzyp/.zip files are useful for development but make every
+rem deployment grow. The selector reads app.json from each .tzyp using the
+rem .NET ZIP API available in Windows PowerShell 5.1 (Win7 compatible).
+mkdir "%PKG%\apps_repo"
+if /i "%~1"=="/repoall" (
+    robocopy "apps_repo" "%PKG%\apps_repo" /E /XF *.zip /XD __pycache__ .git /NFL /NDL /NJH /NJS /NP >nul
+    if errorlevel 8 (
+        echo [!] robocopy failed on apps_repo
+        pause
+        exit /b 1
+    )
+) else (
+    echo [2/4] Selecting latest app packages ...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_select_apps.ps1" -Source "%~dp0apps_repo" -Destination "%~dp0%PKG%\apps_repo"
+    if errorlevel 1 (
+        echo [!] app package selection failed
+        pause
+        exit /b 1
+    )
+)
+
 rem files: entries / injection chain / config / launchers
 for %%F in (config.json loader.js boot-stub.js bridge.js novaosd.py server.py novel_server.py requirements.txt README.md start.bat install.bat stop-hotspot.bat enable-hotspot.ps1 disable-hotspot.ps1 set-hotspot-credentials.ps1) do (
     if exist "%%F" (copy /y "%%F" "%PKG%\%%F" >nul) else (echo     [i] skip missing %%F)
+)
+
+rem Injection chain is mandatory. Fail early instead of producing a package
+rem that starts but cannot hook the platform page.
+for %%F in (config.json loader.js boot-stub.js bridge.js novaosd.py novaos2\nova.html) do (
+    if not exist "%PKG%\%%F" (
+        echo [!] Missing required injection file: %PKG%\%%F
+        pause
+        exit /b 1
+    )
 )
 
 rem ---- [3/4] in-package smoke test (imports via bundled runtime) ----

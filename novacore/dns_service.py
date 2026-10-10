@@ -3,21 +3,33 @@
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from novacore.configutil import cfg
 from novacore.netutil import hotspot_ip, answer_ip
+
+DNS_WORKERS = 24
+DNS_CACHE_TTL = 30
 
 # ----------------------------- DNS 服务 -----------------------------
 class DNSQuery:
     def __init__(self, data):
         self.data = data
         self.domain = ""
-        if (data[2] >> 3) & 15 == 0:
-            ini, lon = 12, data[12]
-            while lon != 0:
-                self.domain += data[ini + 1:ini + lon + 1].decode("utf-8", errors="ignore") + "."
-                ini += lon + 1
-                lon = data[ini]
+        if len(data) < 13 or (data[2] >> 3) & 15 != 0:
+            return
+        ini = 12
+        labels = []
+        while ini < len(data):
+            lon = data[ini]
+            if lon == 0:
+                break
+            if lon > 63 or ini + 1 + lon > len(data):
+                self.domain = ""
+                return
+            labels.append(data[ini + 1:ini + 1 + lon].decode("ascii", errors="ignore"))
+            ini += lon + 1
+        self.domain = ".".join(labels)
 
     def build_response(self, ip):
         pkt = self.data[:2] + b"\x85\x80"
@@ -32,6 +44,56 @@ class DNSThread(threading.Thread):
         super().__init__(daemon=True)
         self.running = False
         self.sock = None
+        self.pool = ThreadPoolExecutor(max_workers=DNS_WORKERS)
+        self.send_lock = threading.Lock()
+        self.cache = {}
+        self.cache_lock = threading.Lock()
+
+    def _send(self, data, addr):
+        with self.send_lock:
+            if self.sock:
+                self.sock.sendto(data, addr)
+
+    def _handle_query(self, data, addr):
+        try:
+            q = DNSQuery(data)
+            domain = q.domain.strip(".").lower()
+            if not domain:
+                return
+            hijacked = {str(d).strip().lower() for d in cfg("hijack_domains", [])}
+            if domain in hijacked:
+                self._send(q.build_response(answer_ip()), addr)
+                return
+
+            key = data[2:] if len(data) >= 12 else data
+            now = time.time()
+            with self.cache_lock:
+                hit = self.cache.get(key)
+                if hit and hit[0] > now:
+                    self._send(data[:2] + hit[1], addr)
+                    return
+                if hit:
+                    self.cache.pop(key, None)
+
+            for up in cfg("dns_upstreams", ["223.5.5.5"]):
+                f = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    f.settimeout(1.2)
+                    f.sendto(data, (up, 53))
+                    resp, _ = f.recvfrom(4096)
+                    if len(resp) >= 2:
+                        with self.cache_lock:
+                            if len(self.cache) >= 2048:
+                                self.cache.clear()
+                            self.cache[key] = (now + DNS_CACHE_TTL, resp[2:])
+                    self._send(resp, addr)
+                    return
+                except Exception:
+                    continue
+                finally:
+                    f.close()
+        except Exception as e:
+            print("[DNS] 处理异常：%s" % e)
 
     def run(self):
         # 热点模式：必须精确绑定热点网卡 IP。
@@ -88,25 +150,9 @@ class DNSThread(threading.Thread):
                 continue
             except OSError:
                 break
-            try:
-                q = DNSQuery(data)
-                domain = q.domain.strip(".").lower()
-                if domain in [d.lower() for d in cfg("hijack_domains", [])]:
-                    self.sock.sendto(q.build_response(answer_ip()), addr)
-                else:
-                    for up in cfg("dns_upstreams", ["223.5.5.5"]):
-                        try:
-                            f = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                            f.settimeout(1.5)
-                            f.sendto(data, (up, 53))
-                            resp, _ = f.recvfrom(2048)
-                            self.sock.sendto(resp, addr)
-                            f.close()
-                            break
-                        except Exception:
-                            continue
-            except Exception as e:
-                print("[DNS] 处理异常：%s" % e)
+            if len(data) < 12:
+                continue
+            self.pool.submit(self._handle_query, data, addr)
 
     def stop(self):
         self.running = False
@@ -115,3 +161,4 @@ class DNSThread(threading.Thread):
                 self.sock.close()
         except Exception:
             pass
+        self.pool.shutdown(wait=False)

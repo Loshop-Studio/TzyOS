@@ -96,12 +96,10 @@ def _spawn():
     env["PYTHONIOENCODING"] = "utf-8"
     flags = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW
     try:
-        os.makedirs(LOG_DIR, exist_ok=True)
-        logf = open(os.path.join(LOG_DIR, "novel.log"), "a",
-                    encoding="utf-8", buffering=1)
         p = subprocess.Popen(
             [py, "-X", "utf8", _SCRIPT, "--port", str(novel_port())],
-            cwd=HERE, env=env, stdout=logf, stderr=logf,
+            cwd=HERE, env=env, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             creationflags=flags)
     except Exception as e:
         slog("error", "novel", "启动 novel_server 失败：%s" % e)
