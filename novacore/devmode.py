@@ -26,7 +26,7 @@ from novacore.paths import slog
 POLL_SECONDS = 25.0      # 长轮询单次挂起上限（秒）
 EXEC_TIMEOUT = 30.0      # exec 默认等待结果上限（秒）
 SESSION_TTL = 900.0      # 会话闲置回收（15 分钟）
-TEMP_ENABLE_TTL = 120.0  # 平板临时开启后，无轮询两分钟自动关闭
+TEMP_ENABLE_TTL = 900.0  # 平板临时开启后，无轮询十五分钟自动关闭
 RESULT_KEEP = 300        # 最近完成结果保留条数
 LOG_KEEP = 400           # 服务端事件日志上限
 
@@ -158,6 +158,7 @@ class DevHub(object):
             "addr": (request.remote_addr if request else "") or "",
         }
         sess.last_seen = time.time()
+        self.touch_enabled()
         if fresh:
             self.note("hello", "设备接入 %s token=%s UA=%s" % (
                 sess.info["addr"], tok, sess.info["ua"][:60]))

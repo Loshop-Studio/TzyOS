@@ -95,3 +95,23 @@
 - gzip 往返测试通过：300,000 字节重复中文文本压缩至 326 字节并逐字还原；60,000 字节随机数据压缩后为 60,038 字节，正确回退到 60,000 字节原始 Blob；4 KiB 文件正确绕过压缩。
 - `os.js` 和构建产物均通过 `node --check`，`git diff --check` 通过，源码与发布目录的 `os.js`、`nova.html` 哈希一致；`build_all.bat` 成功，包内运行时 smoke test 输出 `package import ok`。
 - `dist/TzyOS/apps_repo` 仍仅含 9 个应用的最新版；`dist/TzyOS.zip` 大小 20,765,566 字节，SHA-256 为 `90314884EF81743980B0C4FA9A236D5066E03282A42FF22BA9C94E4294330FE0`。
+
+## 2026-10-12 Learning Toolbox 3.7.0 资源代理与云笔记修复
+
+- 已复用 NovaCore 的 `api/web` 二进制后端代理：图库照片下载、云笔记缩略图/图片预览、拍照导入以及在线专栏附件缓存均通过电脑端读取，避免平板浏览器的 CORS 与 HTTP/HTTPS 混合内容限制。
+- 云笔记“下载源文件”和源文件本地缓存仍保持浏览器直连，没有改走后端代理。
+- 云笔记详情按 `resourceType == 2` 区分缩略图，其余资源归入图片，重写为“缩略图 / 图片”双栏显示；预览资源使用代理 Blob URL，切换笔记时回收旧 URL。
+- 已为 `.tzyp` 清单增加依赖脚本声明，系统应用加载器会先串行执行 `crypto-js.js` 再执行 `main.js`，修复 `CryptoJS is not defined`。
+- 已生成 `apps_repo/learning-toolbox-3.7.0.tzyp`，包内仅含 `app.json`、`crypto-js.js`、`main.js`；CryptoJS AES/MD5 与 Toolbox 3.7.0 注册顺序运行测试通过。
+- `os.js`、Toolbox `main.js`、`crypto-js.js` 和媒体播放器均通过 `node --check`；NovaCore Python 文件通过 `py_compile`，`git diff --check` 通过。本轮尚未执行完整 `build_all.bat`、Git 提交或目标同步。
+
+## 2026-10-12 Toolbox 3.7.1 / DevLink 快速验证
+
+- 修复旧应用注册表不保存 `scripts` 的问题：启动时会从已安装包内 `app.json` 补读依赖，安装注册表也会持久化依赖列表；`crypto-js.js` 在 Toolbox `main.js` 前执行，CryptoJS AES/MD5 加载测试通过。
+- DevLink 临时开启时间延长至 15 分钟，并在主动检测时清除网络离线冷却，电脑服务短暂恢复后可以立即重新握手。
+- 后端代理对无后缀 JPEG/PNG/GIF/WebP/PDF/MP4 按文件签名识别 MIME，并为 `X-File-Name` 补正确扩展名；模拟无后缀 JPEG 代理测试通过。
+- Toolbox 3.7.1 专栏缓存会扫描 HTML 中的图片、视频、音频、iframe、embed、object 和接口附件字段；本地 HTML 中的文档链接可下载，视频/音频带 controls 并可播放。
+- `node --check`、运行时 Python `py_compile`、`git diff --check` 和 Toolbox 依赖/HTML 映射测试均通过。
+- `build_all.bat` 构建成功，包内运行时 smoke test 输出 `package import ok`；`dist/TzyOS/apps_repo` 仅保留 9 个应用的最新版，其中 Learning Toolbox 为 3.7.1。
+- 本次 `dist/TzyOS.zip` SHA-256 为 `198DF6607238097DAACA73FFA8762EF6E48432C4C04CCB8BF2C553C30220D9E3`。
+- 完整项目和发布树已同步到 SMB `\\10.10.28.10\Temp\TZY\NovaOS-Stealth` 及 U 盘 `F:\TZY\NovaOS-Stealth`；两处 ZIP 哈希均与本地一致，发布树均为 9 个最新版应用包。

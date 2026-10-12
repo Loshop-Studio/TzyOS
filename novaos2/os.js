@@ -691,7 +691,11 @@
     return step();
   }
 
-  function devCall(kind, body) { return netCall("sys/dev-" + kind, body); }
+  function devCall(kind, body) {
+    // DevLink 是主动诊断入口，必须绕过普通请求的短暂离线冷却并立刻重探。
+    NET.nextProbeAt = 0;
+    return netCall("sys/dev-" + kind, body);
+  }
 
   /* 轮询主循环（单链）：无 token → hello 握手；有 token → 长轮询挂起。
    * 断网指数退避（2s→15s）；电脑端关闭开发模式 → 60s 后再试。 */
@@ -2039,29 +2043,50 @@
     } catch (e) { return bin; }
   }
 
-  // 注入一个已安装应用的入口脚本（Blob 网址，全局作用域）
-  function loadInstalledApp(meta) {
-    var mainPath = APPS_ROOT + "/" + meta.id + "/" + (meta.main || "main.js");
-    return vfs.get(mainPath).then(function (g) {
+  // 注入包内脚本（Blob 网址，全局作用域）。依赖脚本必须先于入口串行执行。
+  function loadInstalledScript(meta, file, isMain) {
+    var scriptPath = APPS_ROOT + "/" + meta.id + "/" + file;
+    return vfs.get(scriptPath).then(function (g) {
       if (!g || !g.ok) throw new Error((g && g.error) || "入口缺失");
       var code = (g.text !== undefined && g.text !== null) ? g.text : b64ToText(g.data);
       var url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
-      loadingPkgId = meta.id;
+      if (isMain) loadingPkgId = meta.id;
       return new Promise(function (resolve, reject) {
         var s = document.createElement("script");
         s.onload = function () {
           URL.revokeObjectURL(url);
-          loadingPkgId = null;
+          if (isMain) loadingPkgId = null;
           resolve(meta);
         };
         s.onerror = function () {
           URL.revokeObjectURL(url);
-          loadingPkgId = null;
-          reject(new Error("入口脚本执行失败：" + (meta.main || "main.js")));
+          if (isMain) loadingPkgId = null;
+          reject(new Error((isMain ? "入口脚本" : "依赖脚本") + "执行失败：" + file));
         };
         s.src = url;
         document.head.appendChild(s);
       });
+    });
+  }
+
+  // 注入一个已安装应用声明的依赖脚本及入口脚本。
+  function loadInstalledApp(meta) {
+    // 兼容旧注册表：早期安装器没有保存 scripts，重新从包内 app.json 补读。
+    var manifestPath = APPS_ROOT + "/" + meta.id + "/app.json";
+    return vfs.get(manifestPath).then(function (mf) {
+      if (mf && mf.ok) {
+        try {
+          var declared = JSON.parse(mf.text !== undefined ? mf.text : b64ToText(mf.data));
+          if (declared && Array.isArray(declared.scripts)) meta.scripts = declared.scripts.slice();
+        } catch (_) { }
+      }
+      var scripts = Array.isArray(meta.scripts) ? meta.scripts.slice() : [];
+      var chain = Promise.resolve();
+      scripts.forEach(function (file) {
+        if (typeof file !== "string" || !file || file.indexOf("..") >= 0 || /^[\\/]/.test(file)) return;
+        chain = chain.then(function () { return loadInstalledScript(meta, file, false); });
+      });
+      return chain.then(function () { return loadInstalledScript(meta, meta.main || "main.js", true); });
     });
   }
 
@@ -2217,7 +2242,7 @@
       var ex = appsRegGet().filter(function (m) { return m.id === meta.id; })[0];
       var regItem = {
         id: meta.id, name: String(meta.name), version: String(meta.version || "1.0.0"),
-        main: meta.main, icon: meta.icon || "📦", iconData: ctx.iconData || "",
+        main: meta.main, scripts: Array.isArray(meta.scripts) ? meta.scripts.slice() : [], icon: meta.icon || "📦", iconData: ctx.iconData || "",
         tone: meta.tone || "tone-blue",
         maximize: !!meta.maximize, desktop: meta.desktop !== false,
         desc: String(meta.desc || ""), author: String(meta.author || ""),

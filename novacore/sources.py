@@ -197,6 +197,7 @@ def _ftp_connect(b):
     # 许多局域网 FTP 服务仍使用 GBK/CP936；UTF-8 服务通常会在 FEAT 中声明。
     # 允许前端显式传 encoding，同时自动避免中文目录名被 latin-1 解码成乱码。
     requested_encoding = str(b.get("encoding", "") or "").strip()
+    ftp._nova_auto_encoding = not bool(requested_encoding)
     if requested_encoding:
         ftp.encoding = requested_encoding
     else:
@@ -205,7 +206,61 @@ def _ftp_connect(b):
             ftp.encoding = "utf-8" if "UTF8" in feat or "UTF-8" in feat else "cp936"
         except Exception:
             ftp.encoding = "utf-8"
+    ftp._nova_list_encoding = ftp.encoding
     return ftp
+
+
+def _ftp_path_call(ftp, call):
+    """执行含路径的 FTP 命令；自动模式兼容“命令 CP936、列表 UTF-8”的服务器。"""
+    primary = getattr(ftp, "_nova_command_encoding", ftp.encoding)
+    encodings = [primary]
+    if getattr(ftp, "_nova_auto_encoding", False) and primary.lower() != "cp936":
+        encodings.append("cp936")
+    last_error = None
+    for encoding in encodings:
+        ftp.encoding = encoding
+        try:
+            result = call()
+            ftp._nova_command_encoding = encoding
+            return result
+        except ftplib.error_perm as e:
+            last_error = e
+    if last_error is not None:
+        raise last_error
+
+
+def _ftp_cwd(ftp, path):
+    if path:
+        # Gene6 等服务对带中文的多级路径不接受一次性 CWD；逐段进入也
+        # 能让自动编码在第一个中文目录成功后复用正确的命令编码。
+        parts = [p for p in str(path).replace("\\", "/").split("/") if p]
+        for part in parts:
+            _ftp_path_call(ftp, lambda part=part: ftp.cwd(part))
+        return None
+    return None
+
+
+def _ftp_at_path(ftp, path, call):
+    """逐级进入父目录后，对末级名称执行命令，兼容中文多级路径。"""
+    parts = [p for p in str(path or "").replace("\\", "/").split("/") if p]
+    if not parts:
+        raise ValueError("缺少 FTP 路径")
+    _ftp_cwd(ftp, "/".join(parts[:-1]))
+    name = parts[-1]
+    return _ftp_path_call(ftp, lambda: call(name))
+
+
+def _ftp_list_current(ftp):
+    """列当前目录；数据列表使用服务端声明的编码，与 CWD 命令编码分离。"""
+    ftp.encoding = getattr(ftp, "_nova_list_encoding", ftp.encoding)
+    try:
+        return list(ftp.mlsd())
+    except UnicodeDecodeError:
+        if not getattr(ftp, "_nova_auto_encoding", False) or ftp.encoding.lower() == "cp936":
+            raise
+        ftp.encoding = "cp936"
+        ftp._nova_list_encoding = "cp936"
+        return list(ftp.mlsd())
 
 
 def api_ftp(method):
@@ -221,16 +276,19 @@ def api_ftp(method):
         ftp = _ftp_connect(b)
         if op == "list":
             items = []
+            _ftp_cwd(ftp, path)
             try:
-                for name, facts in ftp.mlsd(path or "."):
-                    if name in (".", ".."):
+                for name, facts in _ftp_list_current(ftp):
+                    entry_type = str(facts.get("type") or "").lower()
+                    if name in (".", "..") or entry_type in ("cdir", "pdir"):
                         continue
-                    items.append({"name": name, "dir": facts.get("type") == "dir",
+                    items.append({"name": name, "dir": entry_type == "dir",
                                   "size": int(facts.get("size") or 0), "mtime": 0})
-            except Exception as list_error:
+            except (ftplib.error_perm, ftplib.error_reply, NotImplementedError):
                 base = ftp.pwd()
                 try:
-                    names = ftp.nlst(path or ".")
+                    ftp.encoding = getattr(ftp, "_nova_list_encoding", ftp.encoding)
+                    names = ftp.nlst()
                 except UnicodeDecodeError:
                     # 部分服务器声明 UTF8，但 NLST 实际仍返回 GBK/CP936。
                     # 只有自动模式才重试，用户显式选择的编码保持不变。
@@ -244,7 +302,7 @@ def api_ftp(method):
                         continue
                     is_dir = False
                     try:
-                        ftp.cwd((path.rstrip("/") + "/" + name) if path else name)
+                        _ftp_cwd(ftp, name)
                         is_dir = True
                         ftp.cwd(base)
                     except Exception:
@@ -256,7 +314,7 @@ def api_ftp(method):
             return _api_json({"ok": True, "path": path, "entries": _sort_entries(items)})
         if op == "get":
             buf = io.BytesIO()
-            ftp.retrbinary("RETR " + path, buf.write)
+            _ftp_at_path(ftp, path, lambda name: ftp.retrbinary("RETR " + name, buf.write))
             data = buf.getvalue()
             try:
                 return _api_json({"ok": True, "text": True, "content": data.decode("utf-8")})
@@ -266,24 +324,25 @@ def api_ftp(method):
         if op == "put":
             raw = (base64.b64decode(b.get("data", "")) if b.get("data")
                    else str(b.get("content", "")).encode("utf-8"))
-            ftp.storbinary("STOR " + path, io.BytesIO(raw))
+            _ftp_at_path(ftp, path, lambda name: ftp.storbinary("STOR " + name, io.BytesIO(raw)))
             return _api_json({"ok": True})
         if op == "del":
             try:
-                ftp.delete(path)
+                _ftp_at_path(ftp, path, ftp.delete)
             except Exception:
-                ftp.rmd(path)
+                _ftp_at_path(ftp, path, ftp.rmd)
             return _api_json({"ok": True})
         if op == "mkdir":
-            ftp.mkd(path)
+            _ftp_at_path(ftp, path, ftp.mkd)
             return _api_json({"ok": True})
         if op == "rename":
             new_name = str(b.get("newName", "")).strip().replace("/", "").replace("\\", "")
             if not new_name:
                 return _api_json({"ok": False, "error": "新名称不能为空"}, 400)
             parent = path.rsplit("/", 1)[0] if "/" in path else ""
-            new_path = (parent + "/" + new_name) if parent else new_name
-            ftp.rename(path, new_path)
+            _ftp_cwd(ftp, parent)
+            old_name = path.replace("\\", "/").rstrip("/").split("/")[-1]
+            _ftp_path_call(ftp, lambda: ftp.rename(old_name, new_name))
             return _api_json({"ok": True})
         return _api_json({"ok": False, "error": "未知操作"}, 400)
     except Exception as e:
@@ -473,6 +532,20 @@ def api_web():
 
     body = b"".join(chunks)
     ctype = (up.headers.get("Content-Type") or "application/octet-stream").split(";")[0].strip()
+    # 部分 OSS/CDN 对无后缀资源统一返回 octet-stream；根据文件签名恢复常见媒体类型。
+    if ctype in ("", "application/octet-stream", "binary/octet-stream"):
+        if body.startswith(b"\xff\xd8\xff"):
+            ctype = "image/jpeg"
+        elif body.startswith(b"\x89PNG\r\n\x1a\n"):
+            ctype = "image/png"
+        elif body[:6] in (b"GIF87a", b"GIF89a"):
+            ctype = "image/gif"
+        elif body.startswith(b"RIFF") and body[8:12] == b"WEBP":
+            ctype = "image/webp"
+        elif body.startswith(b"%PDF-"):
+            ctype = "application/pdf"
+        elif len(body) > 12 and body[4:8] == b"ftyp":
+            ctype = "video/mp4"
     name = ""
     cd = up.headers.get("Content-Disposition") or ""
     m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)', cd, re.I)
@@ -482,6 +555,14 @@ def api_web():
     if not name:
         from urllib.parse import urlparse, unquote
         name = unquote(os.path.basename(urlparse(url).path)) or "download"
+    ext = {
+            "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+            "image/webp": ".webp", "application/pdf": ".pdf", "video/mp4": ".mp4",
+        }.get(ctype) or mimetypes.guess_extension(ctype) or ""
+    if ext and re.search(r"\.(?:bin|dat)$", name, re.I):
+        name = re.sub(r"\.[^.]+$", ext, name)
+    elif not re.search(r"\.[A-Za-z0-9]{1,8}$", name):
+        name += ext
     resp = Response(body, status=200)
     resp.headers["Content-Type"] = ctype
     resp.headers["Content-Length"] = str(len(body))
