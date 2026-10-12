@@ -300,6 +300,12 @@
           NET.info = res.info;
           NET.nextProbeAt = 0;
           Store.set(BASE_KEY, res.base);
+          // Best effort: keep the origin's IndexedDB/VFS in persistent storage.
+          // Re-check when the computer backend comes back because some WebViews
+          // only grant persistence after the site has been used for a while.
+          requestStoragePersistence("backend-online");
+          scheduleVfsMaintenance("backend-online");
+          refreshSystemCache(res.base);
           try { nvLog("info", "net", "电脑服务就绪：" + (res.base || "(同源)") +
             " wan=" + (res.info.wan ? 1 : 0) + " answer=" + res.info.answer); } catch (_) { }
         } else {
@@ -1332,6 +1338,108 @@
     });
   }
 
+  /* ---------- VFS transparent compression + eviction protection ----------
+   * Logical metadata (`size`) always remains the original byte count, while
+   * `storedSize` records physical blob bytes.  Existing callers therefore see
+   * exactly the same files and quota accounting can expose both figures.
+   *
+   * CompressionStream is available in the tablet's Chromium 99 WebView.  On
+   * older engines every helper falls back to the original Blob; no database
+   * schema upgrade or destructive bulk rewrite is required. */
+  var VFS_GZIP = "gzip-v1";
+  var VFS_COMPRESS_MIN = 8 * 1024;
+  var vfsMaint = { db: null, timer: 0, running: false, persistAt: 0, persistP: null };
+
+  function vfsTextLike(f, path) {
+    var name = String((f && f.name) || String(path || "").split("/").pop() || "");
+    var mime = String((f && f.mime) || "").split(";", 1)[0].toLowerCase();
+    return (f && f.kind === "text") || /^text\//.test(mime) ||
+      /\.(txt|md|markdown|log|csv|json|js|css|html?|xml|yaml|yml|ini|conf|cfg)$/i.test(name);
+  }
+
+  function gzipBlob(blob) {
+    if (!blob || blob.size < VFS_COMPRESS_MIN || typeof CompressionStream === "undefined" ||
+        typeof DecompressionStream === "undefined" || !blob.stream) {
+      return Promise.resolve({ blob: blob, encoding: "identity-v1" });
+    }
+    try {
+      var stream = blob.stream().pipeThrough(new CompressionStream("gzip"));
+      return new Response(stream).blob().then(function (packed) {
+        // Require a meaningful saving; tiny gains are not worth decode overhead.
+        if (!packed || packed.size >= blob.size * 0.90) {
+          return { blob: blob, encoding: "identity-v1" };
+        }
+        return { blob: packed, encoding: VFS_GZIP };
+      }, function () { return { blob: blob, encoding: "identity-v1" }; });
+    } catch (e) {
+      return Promise.resolve({ blob: blob, encoding: "identity-v1" });
+    }
+  }
+
+  function unpackBlob(blob, encoding, mime) {
+    if (encoding !== VFS_GZIP) return Promise.resolve(blob);
+    if (typeof DecompressionStream === "undefined" || !blob || !blob.stream) {
+      return Promise.reject(new Error("当前浏览器不支持读取压缩的离线文件"));
+    }
+    try {
+      var stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
+      return new Response(stream).blob().then(function (raw) {
+        return raw.slice(0, raw.size, mime || "application/octet-stream");
+      });
+    } catch (e) { return Promise.reject(e); }
+  }
+
+  function requestStoragePersistence(reason) {
+    var st = navigator.storage;
+    if (!st || !st.persist || !st.persisted) return Promise.resolve(false);
+    var now = Date.now();
+    if (vfsMaint.persistP) return vfsMaint.persistP;
+    if (now - vfsMaint.persistAt < 30 * 60 * 1000) return Promise.resolve(false);
+    vfsMaint.persistAt = now;
+    vfsMaint.persistP = st.persisted().then(function (yes) {
+      return yes ? true : st.persist().catch(function () { return false; });
+    }).then(function (yes) {
+      try {
+        Store.set("nova2.storage.persistence", { persistent: !!yes, checkedAt: Date.now(), reason: reason || "" });
+        nvLog(yes ? "info" : "warn", "storage", yes ?
+          "离线数据已获得持久存储保护" : "浏览器未授予持久存储，将继续安全使用普通存储");
+      } catch (_) { }
+      return !!yes;
+    }, function () { return false; }).then(function (yes) {
+      vfsMaint.persistP = null;
+      return yes;
+    });
+    return vfsMaint.persistP;
+  }
+
+  // HTTP cache is separate from IndexedDB and cannot be made absolutely
+  // non-evictable.  Whenever the backend reconnects, refresh the exact shell
+  // resources used by this page so a later offline launch has fresh copies.
+  function refreshSystemCache(base) {
+    var key = "nova2.systemCache.refresh";
+    var last = Number(Store.get(key, 0) || 0);
+    if (Date.now() - last < 6 * 60 * 60 * 1000) return;
+    Store.set(key, Date.now());
+    var rels = ["nova.html"], seen = { "nova.html": 1 };
+    try {
+      Array.prototype.forEach.call(document.querySelectorAll("script[src],link[rel=stylesheet][href]"), function (el) {
+        var rel = el.getAttribute("src") || el.getAttribute("href") || "";
+        if (!rel || /^(data:|blob:|https?:\/\/)/i.test(rel)) return;
+        rel = rel.replace(/^\.\//, "").replace(/^\/+/, "");
+        if (!seen[rel]) { seen[rel] = 1; rels.push(rel); }
+      });
+    } catch (_) { }
+    Promise.all(rels.map(function (rel) {
+      return fetch((base || "") + rel, { cache: "reload" }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return true;
+      }).catch(function () { return false; });
+    })).then(function (rows) {
+      var ok = rows.filter(function (x) { return x; }).length;
+      try { nvLog("info", "storage", "系统缓存刷新 " + ok + "/" + rows.length); } catch (_) { }
+    });
+  }
+
   /* ---------- 引擎一：localStorage 降级实现（旧版结构，约 5MB） ---------- */
   function vfsLoad() { return Store.get(VFS_KEY, null) || { dirs: { "": 1 }, files: {} }; }
   function vfsSave(t) {
@@ -1501,11 +1609,10 @@
               // Older app versions could store a text payload through the binary
               // `data` field.  Keep those files readable by recognising their MIME
               // type/name as text even when the persisted kind says "bin".
-              var textName = String(f.name || path.split("/").pop() || "");
-              var textMime = String(f.mime || "").split(";", 1)[0].toLowerCase();
-              var asText = f.kind === "text" || /^text\//.test(textMime) ||
-                /\.(txt|md|markdown|log|csv|json|js|css|html?|xml|yaml|yml|ini|conf|cfg)$/i.test(textName);
-              readBlobAs(r.result || new Blob([]), asText).then(function (val) {
+              var asText = vfsTextLike(f, path);
+              unpackBlob(r.result || new Blob([]), f.encoding, f.mime).then(function (raw) {
+                return readBlobAs(raw, asText);
+              }).then(function (val) {
                 if (asText) resolve({ ok: true, name: f.name, mime: f.mime, text: true, content: val, textContent: val });
                 else resolve({ ok: true, name: f.name, mime: f.mime, data: val });
               }, reject);
@@ -1524,33 +1631,34 @@
       },
       put: function (path, rec) {
         path = vfsNorm(path);
-        return idbMutate(db, function (m, bs) {
+        var isText = rec.text !== undefined && rec.text !== null;
+        var rawBlob, logicalSize, kind;
+        if (isText) {
+          var text = String(rec.text);
+          rawBlob = new Blob([text], { type: "text/plain;charset=utf-8" });
+          logicalSize = textBytes(text);
+          kind = "text";
+        } else {
+          rawBlob = rec.data ? b64ToBlob(rec.data, rec.mime || "application/octet-stream") : new Blob([]);
+          logicalSize = rec.data ? Math.floor(rec.data.replace(/=+$/, "").length * 3 / 4) : 0;
+          kind = "bin";
+        }
+        var packedP = isText ? gzipBlob(rawBlob) : Promise.resolve({ blob: rawBlob, encoding: "identity-v1" });
+        return packedP.then(function (packed) { return idbMutate(db, function (m, bs) {
           var acc = "";
           vfsParent(path).split("/").forEach(function (seg) {
             if (!seg) return;
             acc += "/" + seg;
             m.dirs[acc] = 1;
           });
-          var isText = rec.text !== undefined && rec.text !== null;
-          var blob, size, kind;
-          if (isText) {
-            var s = String(rec.text);
-            blob = new Blob([s], { type: "text/plain;charset=utf-8" });
-            size = textBytes(s);
-            kind = "text";
-          } else {
-            blob = rec.data ? b64ToBlob(rec.data, rec.mime || "application/octet-stream")
-                            : new Blob([]);
-            size = rec.data ? Math.floor(rec.data.replace(/=+$/, "").length * 3 / 4) : 0;
-            kind = "bin";
-          }
           m.files[path] = {
             name: rec.name || path.split("/").pop(),
             mime: rec.mime || "application/octet-stream",
-            size: size, mtime: Date.now(), kind: kind
+            size: logicalSize, storedSize: packed.blob.size,
+            mtime: Date.now(), kind: kind, encoding: packed.encoding
           };
-          bs.put(blob, path);
-        }).catch(function (e) { return quotaError(e); });
+          bs.put(packed.blob, path);
+        }); }).catch(function (e) { return quotaError(e); });
       },
       del: function (path) {
         path = vfsNorm(path);
@@ -1582,17 +1690,25 @@
       },
       usage: function () {
         return idbGetMeta(db).then(function (m) {
-          var nFiles = 0, nDirs = 0, sum = 0, k, d;
-          for (k in m.files) { nFiles++; sum += m.files[k].size || 0; }
+          var nFiles = 0, nDirs = 0, sum = 0, stored = 0, compressed = 0, k, d;
+          for (k in m.files) {
+            nFiles++; sum += m.files[k].size || 0;
+            stored += m.files[k].storedSize == null ? (m.files[k].size || 0) : m.files[k].storedSize;
+            if (m.files[k].encoding === VFS_GZIP) compressed++;
+          }
           for (d in m.dirs) if (d !== "") nDirs++;
           var est = navigator.storage && navigator.storage.estimate ? navigator.storage.estimate() : null;
-          var fallback = { ok: true, bytes: sum, files: nFiles, dirs: nDirs, max: 256 * 1024 * 1024 };
+          var fallback = { ok: true, bytes: sum, logicalBytes: sum, storedBytes: stored,
+            savedBytes: Math.max(0, sum - stored), compressedFiles: compressed,
+            files: nFiles, dirs: nDirs, max: 256 * 1024 * 1024 };
           if (!est) return fallback;
           return est.then(function (q) {
             // estimate 是整个源的配额；usage 取本库时浏览器无细分接口，取 max(文件总和, 源已用)
             return {
               ok: true,
               bytes: Math.max(sum, (q && q.usage) || sum),
+              logicalBytes: sum, storedBytes: stored,
+              savedBytes: Math.max(0, sum - stored), compressedFiles: compressed,
               files: nFiles, dirs: nDirs,
               max: (q && q.quota && q.quota > sum) ? q.quota : fallback.max
             };
@@ -1660,6 +1776,68 @@
     };
     return impl;
   }
+
+  // Convert at most one legacy text Blob per maintenance pass.  Compression is
+  // prepared outside IDB transactions, then blob + metadata are swapped in one
+  // transaction only if the file has not changed meanwhile.
+  function compressOneLegacy(db) {
+    return idbGetMeta(db).then(function (m) {
+      var path = "", meta = null;
+      for (var k in m.files) {
+        var f = m.files[k];
+        if (f && !f.encoding && (f.size || 0) >= VFS_COMPRESS_MIN &&
+            (f.size || 0) <= 32 * 1024 * 1024 && vfsTextLike(f, k) &&
+            (!meta || (f.size || 0) > (meta.size || 0))) {
+          path = k; meta = f;
+        }
+      }
+      if (!path) return { ok: true, idle: true };
+      return new Promise(function (resolve, reject) {
+        var r = db.transaction(["blobs"], "readonly").objectStore("blobs").get(path);
+        r.onsuccess = function () { resolve(r.result || new Blob([])); };
+        r.onerror = function () { reject(r.error || new Error("读取待压缩文件失败")); };
+      }).then(function (raw) {
+        return gzipBlob(raw).then(function (packed) {
+          return idbMutate(db, function (current, bs) {
+            var f = current.files[path];
+            if (!f || f.encoding || f.mtime !== meta.mtime || f.size !== meta.size) {
+              return { ok: true, skipped: true };
+            }
+            f.encoding = packed.encoding;
+            f.storedSize = packed.blob.size;
+            if (packed.encoding === VFS_GZIP) bs.put(packed.blob, path);
+            return { ok: true, path: path, compressed: packed.encoding === VFS_GZIP,
+              before: raw.size, after: packed.blob.size };
+          });
+        });
+      });
+    }).catch(function (e) {
+      try { nvLog("warn", "storage", "后台压缩跳过：" + (e && e.message ? e.message : e)); } catch (_) { }
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    });
+  }
+
+  function scheduleVfsMaintenance(reason) {
+    requestStoragePersistence(reason || "maintenance");
+    if (!vfsMaint.db || vfsMaint.running || vfsMaint.timer) return;
+    vfsMaint.timer = setTimeout(function () {
+      vfsMaint.timer = 0;
+      vfsMaint.running = true;
+      compressOneLegacy(vfsMaint.db).then(function (r) {
+        if (r && r.compressed) {
+          try { nvLog("info", "storage", "后台压缩 " + r.path + "：" + r.before + " → " + r.after + " 字节"); } catch (_) { }
+        }
+      }).then(function () {
+        vfsMaint.running = false;
+        // A single file per pass keeps startup responsive and makes migration
+        // naturally resumable after reload/power loss.
+        vfsMaint.timer = setTimeout(function () {
+          vfsMaint.timer = 0; scheduleVfsMaintenance("periodic");
+        }, 30 * 60 * 1000);
+      }, function () { vfsMaint.running = false; });
+    }, 2000);
+  }
+
   /* 旧 localStorage 数据一次性迁入 IDB（标记存 meta，旧键保留不删） */
   function migrateLegacy(db) {
     return new Promise(function (resolve) {
@@ -1698,7 +1876,11 @@
     });
   }
   var vfsEngineP = openIDB().then(function (db) {
-    return migrateLegacy(db).then(function () { return makeIDBImpl(db); });
+    vfsMaint.db = db;
+    return migrateLegacy(db).then(function () {
+      scheduleVfsMaintenance("startup");
+      return makeIDBImpl(db);
+    });
   }).catch(function (e) {
     try { console.warn("[vfs] IndexedDB 不可用，降级 localStorage：", e); } catch (_) {}
     return legacyVfs;

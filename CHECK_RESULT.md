@@ -73,3 +73,14 @@
 - `build_all.bat` 构建成功，包内运行时 smoke test 输出 `package import ok`；源与发布树的 `os.js` 及 NovelDL 1.0.2 包哈希一致。
 - `dist/TzyOS/apps_repo` 仅保留按应用 ID 选择的 9 个最新包，其中 NovelDL 为 1.0.2；纳入构建时已稳定的并发工作树修改后，最终 `dist/TzyOS.zip` 大小 20,762,824 字节，SHA-256 为 `7E6FC59B6C4992B1CA6BC5ACE1C8CE61803178581D3658CE4475A9B1713138FD`。
 - 本次按要求只同步到 SMB `\\10.10.28.10\Temp\TZY\NovaOS-Stealth`，不访问已拔出的 U 盘。
+
+## 2026-10-12 VFS 透明压缩与缓存保护
+
+- VFS 对不小于 8 KiB 的文本文件启用透明 gzip；只有压缩后小于原始大小 90% 才保存压缩版本，否则保留原始 Blob。文件元数据继续记录原始逻辑大小，另以 `storedSize`、`encoding: gzip-v1` 记录实际占用和格式，应用层接口与文件内容不变。
+- 读取压缩文件时自动流式解压；浏览器不支持 `CompressionStream`/`DecompressionStream`、压缩失败或收益不足时自动使用原格式，不升级 IndexedDB schema，也不一次性重写数据库。
+- 历史文本缓存采用可中断迁移：系统启动后延迟 2 秒，每轮最多迁移一个不超过 32 MiB 的旧文本文件，后续每 30 分钟继续；压缩在事务外准备，最终 Blob 与元数据仅在同一 IndexedDB 事务中原子替换，并在替换前校验文件时间与大小未变化。
+- 系统启动及电脑后端恢复在线时调用 `navigator.storage.persisted()`/`persist()` 请求持久存储保护，浏览器拒绝时只记录状态并保持原行为；持久化状态保存于 `nova2.storage.persistence`。
+- 电脑后端恢复在线时每 6 小时刷新当前系统入口、脚本和样式的 HTTP 缓存；HTTP 缓存与 VFS 分离，刷新失败不会影响启动或 IndexedDB 数据。
+- gzip 往返测试通过：300,000 字节重复中文文本压缩至 326 字节并逐字还原；60,000 字节随机数据压缩后为 60,038 字节，正确回退到 60,000 字节原始 Blob；4 KiB 文件正确绕过压缩。
+- `os.js` 和构建产物均通过 `node --check`，`git diff --check` 通过，源码与发布目录的 `os.js`、`nova.html` 哈希一致；`build_all.bat` 成功，包内运行时 smoke test 输出 `package import ok`。
+- `dist/TzyOS/apps_repo` 仍仅含 9 个应用的最新版；`dist/TzyOS.zip` 大小 20,765,566 字节，SHA-256 为 `90314884EF81743980B0C4FA9A236D5066E03282A42FF22BA9C94E4294330FE0`。
