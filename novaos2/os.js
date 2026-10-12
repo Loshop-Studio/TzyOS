@@ -1498,7 +1498,13 @@
           return new Promise(function (resolve, reject) {
             var r = db.transaction(["blobs"], "readonly").objectStore("blobs").get(path);
             r.onsuccess = function () {
-              var asText = f.kind === "text";
+              // Older app versions could store a text payload through the binary
+              // `data` field.  Keep those files readable by recognising their MIME
+              // type/name as text even when the persisted kind says "bin".
+              var textName = String(f.name || path.split("/").pop() || "");
+              var textMime = String(f.mime || "").split(";", 1)[0].toLowerCase();
+              var asText = f.kind === "text" || /^text\//.test(textMime) ||
+                /\.(txt|md|markdown|log|csv|json|js|css|html?|xml|yaml|yml|ini|conf|cfg)$/i.test(textName);
               readBlobAs(r.result || new Blob([]), asText).then(function (val) {
                 if (asText) resolve({ ok: true, name: f.name, mime: f.mime, text: true, content: val, textContent: val });
                 else resolve({ ok: true, name: f.name, mime: f.mime, data: val });

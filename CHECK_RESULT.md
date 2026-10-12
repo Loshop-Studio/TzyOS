@@ -52,3 +52,13 @@
 - 默认 `build_all.bat` 成功，包内运行时冒烟测试输出 `package import ok`，`dist/TzyOS/apps_repo` 仍只有 9 个最新版应用包。
 - 本次 `dist/TzyOS.zip` 大小为 20,761,701 字节，SHA-256 为 `DD07C53540F6CDA352F9D2C59787B359AC2B3B7EBED6B6A1756EBB1678A7FA2F`。
 - 按要求仅同步到 SMB 目标 `\\10.10.28.10\Temp\TZY\NovaOS-Stealth`，未访问已拔出的 U 盘；目标中的 `files.js`、`nova.html`、`dist/TzyOS.zip` 哈希均与源目录一致，发布目录为 9 个最新版应用包，完整项目和发布树 dry-run 均返回 0。
+
+## 2026-10-12 NovelDL TXT 文本兼容修复
+
+- 已定位文本编辑器提示“不是文本文件”的原因：NovelDL 1.0.1 将 TXT 转为 Base64 后通过 VFS 的 `data` 字段保存，VFS 因而把节点记为二进制 `kind: "bin"`；电脑直接复制的 TXT 使用文本路径，所以可正常打开。
+- 新增 `noveldl-1.0.2.tzyp`：TXT、Markdown、日志、CSV、JSON 等文本导出改用 Blob 文本解码并通过 VFS `text` 字段保存；EPUB 等非文本格式仍使用 Base64 二进制路径。
+- 系统 VFS 增加历史缓存兼容：除 `kind: "text"` 外，还会依据 `text/*` MIME 和文本扩展名读取为文本，因此 NovelDL 1.0.1 已缓存的 `.txt` 无需重新下载即可由文本编辑器打开。
+- `os.js` 与 NovelDL 1.0.2 `main.js` 均通过 `node --check`；旧二进制 TXT、`text/plain` MIME 和 EPUB 反例的兼容逻辑测试通过；`git diff --check` 通过。
+- `build_all.bat` 构建成功，包内运行时 smoke test 输出 `package import ok`；源与发布树的 `os.js` 及 NovelDL 1.0.2 包哈希一致。
+- `dist/TzyOS/apps_repo` 仅保留按应用 ID 选择的 9 个最新包，其中 NovelDL 为 1.0.2；纳入构建时已稳定的并发工作树修改后，最终 `dist/TzyOS.zip` 大小 20,762,824 字节，SHA-256 为 `7E6FC59B6C4992B1CA6BC5ACE1C8CE61803178581D3658CE4475A9B1713138FD`。
+- 本次按要求只同步到 SMB `\\10.10.28.10\Temp\TZY\NovaOS-Stealth`，不访问已拔出的 U 盘。
