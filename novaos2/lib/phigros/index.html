@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="./utils/style.css" />
     <link rel="stylesheet" href="style.css" />
     <script src="./utils/main.js?v=1791016060"></script>
-    <script type="module" src="script-1.5.9.2.js"></script>
+    <script type="module" src="script-1.5.9.2.js?v=20261012-phi-module-fix1"></script>
   </head>
 
   <body>
@@ -158,7 +158,24 @@
         // Native fullscreen hides the OS chrome and can capture touch routing.
         var pseudoFullscreen = null;
         var fsStyle = document.createElement('style');
-        fsStyle.textContent = '.nv-phi-pseudo-fullscreen{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:1000!important;background:#000!important}';
+        fsStyle.textContent = [
+          '.nv-phi-pseudo-fullscreen{',
+          'position:fixed!important;inset:0!important;',
+          'width:100%!important;height:100%!important;',
+          'margin:0!important;padding:0!important;',
+          'overflow:hidden!important;z-index:1000!important;',
+          'background:#000!important;',
+          '}',
+          '.nv-phi-pseudo-fullscreen #stage{',
+          'position:fixed!important;inset:0!important;',
+          'width:100%!important;height:100%!important;',
+          'max-width:none!important;max-height:none!important;',
+          'margin:0!important;',
+          '}',
+          '.nv-phi-pseudo-fullscreen #stage canvas{',
+          'max-width:none!important;max-height:none!important;',
+          '}'
+        ].join('');
         document.head.appendChild(fsStyle);
         try {
           Object.defineProperty(document, 'fullscreenElement', {
@@ -175,20 +192,34 @@
           });
         } catch (e) {}
         function fsChange() {
-          try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) {}
-          try { document.dispatchEvent(new Event('webkitfullscreenchange')); } catch (e) {}
+          // Native requestFullscreen dispatches its change event after the
+          // call returns. Keep that ordering so upstream toggle() can attach
+          // its once-listeners before the pseudo-fullscreen event arrives.
+          setTimeout(function () {
+            try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) {}
+            try { document.dispatchEvent(new Event('webkitfullscreenchange')); } catch (e) {}
+          }, 0);
         }
         function pseudoEnter() {
+          // Keep fullscreen strictly inside the phi iframe.  The upstream
+          // implementation requests fullscreen on body; promote the stage
+          // layout along with it so the result is not a black body only.
           if (pseudoFullscreen) pseudoFullscreen.classList.remove('nv-phi-pseudo-fullscreen');
-          pseudoFullscreen = this;
+          var stage = document.getElementById('stage');
+          pseudoFullscreen = this === document.body ? document.body : this;
           pseudoFullscreen.classList.add('nv-phi-pseudo-fullscreen');
+          if (stage && stage !== pseudoFullscreen) stage.classList.add('nv-phi-pseudo-fullscreen');
           fsChange();
+          try { window.dispatchEvent(new Event('resize')); } catch (e) {}
           return Promise.resolve();
         }
         function pseudoExit() {
           if (pseudoFullscreen) pseudoFullscreen.classList.remove('nv-phi-pseudo-fullscreen');
+          var stage = document.getElementById('stage');
+          if (stage) stage.classList.remove('nv-phi-pseudo-fullscreen');
           pseudoFullscreen = null;
           fsChange();
+          try { window.dispatchEvent(new Event('resize')); } catch (e) {}
           return Promise.resolve();
         }
         try {

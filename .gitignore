@@ -22,6 +22,7 @@ build-dist/
 
 # Unpacked app-package build directories (release .tzyp files are force-added selectively)
 apps_repo/*/
+!apps_repo/*.tzyp
 
 # 构建缓存（下载的 embed 包 / get-pip.py）
 build-cache/

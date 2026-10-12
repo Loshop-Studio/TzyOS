@@ -69,6 +69,12 @@ export class Interact {
     touchcancelCallback = function() {}
   }) {
     const passive = { passive: false }; // warning
+    // Scope gesture suppression to the game canvas only.  Do not install a
+    // document/window listener: other OS apps and pages must keep scrolling.
+    const previousTouchAction = this.element.style.touchAction;
+    const previousWebkitTouchAction = this.element.style.webkitTouchAction;
+    this.element.style.touchAction = 'none';
+    this.element.style.webkitTouchAction = 'none';
     /** @type {(ev:TouchEvent)=>void} */
     const touchstart = evt => {
       evt.preventDefault();
@@ -91,17 +97,21 @@ export class Interact {
     };
     this.element.addEventListener('touchstart', touchstart, passive);
     this.element.addEventListener('touchmove', touchmove, passive);
-    this.element.addEventListener('touchend', touchend);
-    this.element.addEventListener('touchcancel', touchcancel);
-    return this.callbacks.push({ touchstart, touchmove, touchend, touchcancel });
+    this.element.addEventListener('touchend', touchend, passive);
+    this.element.addEventListener('touchcancel', touchcancel, passive);
+    return this.callbacks.push({ touchstart, touchmove, touchend, touchcancel,
+      previousTouchAction, previousWebkitTouchAction });
   }
   /** @param {number} id */
   clearTouchEvent(id) {
-    const { touchstart, touchmove, touchend, touchcancel } = this.callbacks[id - 1];
+    const { touchstart, touchmove, touchend, touchcancel,
+      previousTouchAction, previousWebkitTouchAction } = this.callbacks[id - 1];
     this.element.removeEventListener('touchstart', touchstart);
     this.element.removeEventListener('touchmove', touchmove);
     this.element.removeEventListener('touchend', touchend);
     this.element.removeEventListener('touchcancel', touchcancel);
+    this.element.style.touchAction = previousTouchAction || '';
+    this.element.style.webkitTouchAction = previousWebkitTouchAction || '';
     this.callbacks[id - 1] = null;
   }
   /**
@@ -164,7 +174,14 @@ export class InteractProxy {
       const target = evt && evt.target;
       if (target && target.contains && target.contains(this.element)) this.destroy();
     };
+    this.forceReleaseHandler = evt => {
+      if (evt && evt.type === 'message' &&
+          (!evt.data || evt.data.type !== 'nv-phi-force-release')) return;
+      this.deactive();
+    };
     document.addEventListener('nv-close', this.closeHandler);
+    document.addEventListener('nv-phi-force-release', this.forceReleaseHandler);
+    self.addEventListener('message', this.forceReleaseHandler);
   }
   /** @param {MouseCallbacks} callbacks */
   setMouseEvent(callbacks) {
@@ -198,6 +215,11 @@ export class InteractProxy {
     if (this.closeHandler) {
       document.removeEventListener('nv-close', this.closeHandler);
       this.closeHandler = null;
+    }
+    if (this.forceReleaseHandler) {
+      document.removeEventListener('nv-phi-force-release', this.forceReleaseHandler);
+      self.removeEventListener('message', this.forceReleaseHandler);
+      this.forceReleaseHandler = null;
     }
   }
 }

@@ -26,6 +26,7 @@ from novacore.sources import lan_hosts, serve_nova_api, api_preflight
 from novacore.web_proxy import serve_web_proxy
 from novacore.novel_dl import proxy_novel
 from novacore import toolkit
+from novacore.lan_chat import handle_lan_request
 
 def create_proxy_app():
     app = Flask("nova-proxy", static_folder=None)  # 禁用默认 /static 路由，避免截胡 CDN 路径
@@ -294,6 +295,9 @@ def create_proxy_app():
                 if request.method == "OPTIONS":
                     return api_preflight()
                 return proxy_novel(rel)
+            # LAN Chat rendezvous/signaling/relay endpoints.
+            if rel.startswith("lan/"):
+                return handle_lan_request(rel[4:], request)
             # 应用 API：GET/POST + 跨域预检（api/web 用 GET 走电脑网络代取外网）
             if rel.startswith("api/"):
                 if request.method == "OPTIONS":

@@ -2152,6 +2152,32 @@
     return true;
   }
 
+  function releasePhiInput(root, releaseAfterLoad) {
+    if (!root) return;
+    try {
+      var frame = root.querySelector("iframe.nv-phi-frame");
+      if (releaseAfterLoad && frame) {
+        frame.addEventListener("load", function () {
+          releasePhiInput(root, false);
+        }, { once: true });
+      }
+      var doc = frame && frame.contentDocument;
+      var FrameEvent = doc && doc.defaultView && doc.defaultView.Event;
+      if (doc) {
+        doc.dispatchEvent(FrameEvent ?
+          new FrameEvent("nv-phi-force-release") : new Event("nv-phi-force-release"));
+        var stage = doc.getElementById("stage");
+        if (stage) {
+          stage.style.touchAction = "";
+          stage.style.webkitTouchAction = "";
+        }
+      }
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.postMessage({ type: "nv-phi-force-release" }, "*");
+      }
+    } catch (e) { }
+  }
+
   function openApp(id, arg) {
     var rec = apps[id];
     if (!rec) { nvLog("warn", "app", "openApp 未找到应用：" + id); return; }
@@ -2198,6 +2224,7 @@
       border: 0,
       onclose: function () {
         // WinBox close 会把 mount 的节点 unmount 回原父节点
+        if (id === "phi") releasePhiInput(rec.root, false);
         try {
           var fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement;
           var phiStage = rec.root && rec.root.querySelector && rec.root.querySelector("#stage");
@@ -2241,6 +2268,7 @@
     // 根节点只 build 一次，像远程浏览器这种在 nv-close 时释放连接的应用，
     // 需要靠它重新订阅，否则重开后永远是冻结的旧画面。
     try { rec.root.dispatchEvent(new Event("nv-open")); } catch (e) { }
+    if (id === "phi") releasePhiInput(rec.root, true);
     renderDock();
   }
 
