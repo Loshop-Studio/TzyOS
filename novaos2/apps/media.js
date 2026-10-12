@@ -1,5 +1,5 @@
 /* ============================================================
- * Tzy OS · 媒体播放器（音/视频）v1.1.0
+ * Tzy OS · 媒体播放器（音/视频）v1.2.0
  * 文件管理器点「播放」→ 从当前源拉取文件转 Blob URL → 本窗口播放。
  * 支持播放列表（同目录媒体）、上一首/下一首、进度拖拽、循环模式。
  * v1.1.0：音频自动加载同目录同名 .lrc 歌词，逐行高亮并自动滚动（Loshop & Cpt）。
@@ -24,7 +24,7 @@
     name: "媒体播放",
     icon: "🎵",
     tone: "tone-ink",
-    version: "1.1.0",
+    version: "1.2.0",
     desktop: false,   // 不上桌面，由文件管理器唤起
     open: function (root) {
       // 首次 open 不初始化，等 onArg 带 payload 来再 build（否则会被 clear 掉）
@@ -104,6 +104,7 @@
     var basePath = payload ? payload.path : "";
     var conn = payload ? payload.conn : null;
     var entries = payload ? payload.entries : [];
+    var loadSerial = 0;
 
     function joinPath(a, b) {
       a = a || "";
@@ -233,16 +234,16 @@
     /* ---------- 核心播放 ---------- */
     function playIdx(idx) {
       if (idx < 0 || idx >= playlist.length) return;
+      var serial = ++loadSerial;
       curIdx = idx;
       var entry = playlist[idx];
       var fullPath = joinPath(basePath, entry.name);
       titleEl.textContent = entry.name;
       infoEl.textContent = "正在加载…";
       renderList();
-      releaseUrl();
-      stopMedia();
 
       fetchEntry(entry).then(function (r) {
+        if (serial !== loadSerial) return;
         if (!r.ok) {
           OS.log("media", "读取媒体失败 [" + source + "] " + fullPath + "：" +
             (r.offline ? "(离线/电脑不可达)" : (r.error || "未知")), "error");
@@ -252,8 +253,8 @@
         var blob = r.text
           ? new Blob([r.content], { type: "audio/mpeg" })
           : OS.b64ToBlob(r.data, r.mime || OS.mimeOf(entry.name));
-        curUrl = URL.createObjectURL(blob);
-        mountMedia(blob, entry);
+        var nextUrl = URL.createObjectURL(blob);
+        mountMedia(blob, entry, serial, nextUrl);
         infoEl.textContent = "";
         // 记录当前 blob 供「存离线」使用
         curBlob = blob;
@@ -261,6 +262,7 @@
         // 音频自动加载同名歌词；视频不显示歌词面板
         if (!isVideo(entry.name)) loadLrc(entry);
       }, function (e) {
+        if (serial !== loadSerial) return;
         OS.logerr("media", e, "读取媒体异常 [" + source + "] " + fullPath);
         infoEl.textContent = "读取失败：" + (e && e.message);
       });
@@ -291,15 +293,35 @@
       });
     });
 
-    function mountMedia(blob, entry) {
+    function mountMedia(blob, entry, serial, nextUrl) {
       var tag = isVideo(entry.name) ? "video" : "audio";
-      mediaEl = document.createElement(tag);
-      mediaEl.__nvUnregister = OS.media && OS.media.register ? OS.media.register(mediaEl) : function () {};
-      mediaEl.controls = false;
-      mediaEl.preload = "auto";
+      var reuse = mediaEl && mediaEl.tagName && mediaEl.tagName.toLowerCase() === tag;
+      var oldUrl = curUrl;
+      if (!reuse) {
+        stopMedia(false);
+        mediaEl = document.createElement(tag);
+        mediaEl.__nvUnregister = OS.media && OS.media.register ? OS.media.register(mediaEl) : function () {};
+        mediaEl.controls = false;
+        mediaEl.preload = "auto";
+        mediaEl.style.maxWidth = "100%";
+        mediaEl.style.maxHeight = "100%";
+        mediaEl.addEventListener("timeupdate", onTimeUpdate);
+        mediaEl.addEventListener("ended", onEnded);
+        mediaEl.addEventListener("loadedmetadata", function () {
+          timeEl.textContent = "00:00 / " + fmtTime(mediaEl.duration);
+        });
+        mediaEl.addEventListener("error", function () {
+          var ec = mediaEl.error ? mediaEl.error.code : "?";
+          OS.log("media", "媒体元素报错 code=" + ec + " 文件=" + (mediaEl.__nvEntry || "") +
+            " src=" + (curUrl ? curUrl.slice(0, 48) : "?"), "error");
+          infoEl.textContent = "无法播放此格式（错误码 " + ec + "）";
+        });
+      }
+      curUrl = nextUrl;
+      mediaEl.__nvEntry = entry.name;
       mediaEl.src = curUrl;
-      mediaEl.style.maxWidth = "100%";
-      mediaEl.style.maxHeight = "100%";
+      if (typeof mediaEl.load === "function") mediaEl.load();
+      if (oldUrl) URL.revokeObjectURL(oldUrl);
       if (tag === "video") {
         // 视频：清空插槽并占满舞台，隐藏信息条与歌词
         videoSlot.innerHTML = "";
@@ -313,30 +335,24 @@
         infoEl.style.display = "";
         lrcBox.style.display = "block";
       }
-      mediaEl.addEventListener("timeupdate", onTimeUpdate);
-      mediaEl.addEventListener("ended", onEnded);
-      mediaEl.addEventListener("loadedmetadata", function () {
-        timeEl.textContent = "00:00 / " + fmtTime(mediaEl.duration);
-      });
-      mediaEl.addEventListener("error", function () {
-        var ec = mediaEl.error ? mediaEl.error.code : "?";
-        OS.log("media", "媒体元素报错 code=" + ec + " 文件=" + entry.name +
-          " src=" + (curUrl ? curUrl.slice(0, 48) : "?"), "error");
-        infoEl.textContent = "无法播放此格式（错误码 " + ec + "）";
-      });
-      mediaEl.play().then(function () {
+      var playPromise = mediaEl.play();
+      if (!playPromise || typeof playPromise.then !== "function") playPromise = Promise.resolve();
+      playPromise.then(function () {
+        if (serial !== loadSerial || !mediaEl) return;
         playing = true;
         btnPlay.textContent = "⏸";
         OS.log("media", "开始播放：" + entry.name + " (" + tag + ")");
       }).catch(function (e) {
+        if (serial !== loadSerial || !mediaEl) return;
         OS.log("media", "自动播放被拦截：" + entry.name + " | " + (e && e.message), "debug");
-        infoEl.textContent = "自动播放被拦截，请点播放";
+        infoEl.textContent = e && e.name === "NotAllowedError" ? "自动播放被浏览器拦截，请点播放" : "播放失败，请点播放重试";
         playing = false;
         btnPlay.textContent = "▶";
       });
     }
 
-    function stopMedia() {
+    function stopMedia(invalidateLoad) {
+      if (invalidateLoad !== false) loadSerial++;
       if (mediaEl) {
         try { if (mediaEl.__nvUnregister) mediaEl.__nvUnregister(); } catch (e) { }
         try { mediaEl.pause(); } catch (e) { }
@@ -392,7 +408,12 @@
     btnPlay.addEventListener("click", function () {
       if (!mediaEl) { if (curIdx >= 0) playIdx(curIdx); return; }
       if (playing) { mediaEl.pause(); playing = false; btnPlay.textContent = "▶"; }
-      else { mediaEl.play(); playing = true; btnPlay.textContent = "⏸"; }
+      else {
+        var p = mediaEl.play();
+        if (!p || typeof p.then !== "function") p = Promise.resolve();
+        p.then(function () { playing = true; btnPlay.textContent = "⏸"; infoEl.textContent = ""; })
+          ["catch"](function (e) { playing = false; btnPlay.textContent = "▶"; infoEl.textContent = "播放失败：" + ((e && e.message) || "浏览器拒绝播放"); });
+      }
     });
     OS.on("media-pause", function (ev) {
       if (!mediaEl) return;

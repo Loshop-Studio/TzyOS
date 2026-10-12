@@ -64,6 +64,17 @@
 - 本次 `dist/TzyOS.zip` 大小为 20,762,897 字节，SHA-256 为 `9DA58210E9E5C9655862E12A0BBFB001A78F11467A8E32C6D75A3748161B90DA`。
 - 本版仅同步到 SMB 目标 `\\10.10.28.10\Temp\TZY\NovaOS-Stealth`；目标中的文件管理器、入口、FTP 后端和 ZIP 哈希均与源一致，`dist/TzyOS/apps_repo` 为 9 个最新版包，完整项目与发布树 dry-run 均返回 0。
 
+## 2026-10-12 领创密码计算与媒体自动下一首
+
+- Learning Toolbox 升级至 3.6.0，新增“领创密码”菜单；仅加入管理员密码计算器，不包含领创应用列表、下载或分享功能。
+- 密码计算按参考项目算法重写：日期 `yyyyMMdd`、小写设备号、固定 UUID 和可选学生 ID 拼接后取 MD5，末 8 位十六进制转十进制，再截取规则中的 6 位密码；计算全程在平板本地完成。
+- 密码算法已使用固定日期、设备号和学生 ID 做独立交叉计算，结果一致；`learning-toolbox-3.6.0.tzyp` 包含 `app.json`、`main.js`、`crypto-js.js`，清单版本验证为 3.6.0。
+- 媒体播放器自动下一首被拦截的原因是旧实现每次切歌都销毁 `<audio>/<video>`，异步读取完整文件后再创建新元素并调用 `play()`，浏览器不再把它视为原播放会话。
+- 媒体播放器升级至 1.2.0：同类型媒体切换时复用同一个元素，仅替换 Blob URL；加入加载代次检查，快速切歌时旧请求不能覆盖新曲目，并正确处理手动播放 Promise 失败。
+- `media.js` 与 Learning Toolbox `main.js` 均通过 `node --check`；静态检查确认 `playIdx` 不再销毁媒体元素、包含同元素复用与过期请求保护。
+- 默认 `build_all.bat` 成功，包内运行时冒烟测试输出 `package import ok`；发布目录仍只有 9 个最新版应用包，其中 Learning Toolbox 为 3.6.0、NovelDL 为 1.0.2。
+- 本次 `dist/TzyOS.zip` 大小为 20,766,638 字节，SHA-256 为 `574E4BD3C544C8545567041B8491A102C3D608ABFE00E424E06236F350755822`。
+
 ## 2026-10-12 NovelDL TXT 文本兼容修复
 
 - 已定位文本编辑器提示“不是文本文件”的原因：NovelDL 1.0.1 将 TXT 转为 Base64 后通过 VFS 的 `data` 字段保存，VFS 因而把节点记为二进制 `kind: "bin"`；电脑直接复制的 TXT 使用文本路径，所以可正常打开。
