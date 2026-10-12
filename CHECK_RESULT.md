@@ -53,6 +53,17 @@
 - 本次 `dist/TzyOS.zip` 大小为 20,761,701 字节，SHA-256 为 `DD07C53540F6CDA352F9D2C59787B359AC2B3B7EBED6B6A1756EBB1678A7FA2F`。
 - 按要求仅同步到 SMB 目标 `\\10.10.28.10\Temp\TZY\NovaOS-Stealth`，未访问已拔出的 U 盘；目标中的 `files.js`、`nova.html`、`dist/TzyOS.zip` 哈希均与源目录一致，发布目录为 9 个最新版应用包，完整项目和发布树 dry-run 均返回 0。
 
+## 2026-10-12 文件管理器 3.4.1 与 FTP 目录修复
+
+- VFS“复制到…”目标窗口新增 VFS 页签，现在可在电脑、VFS、FTP、SMB 四类目标中逐级选择目录；复制 VFS 文件夹到自身或其子目录会被禁止。
+- FTP 连接窗口新增“文件名编码”，默认自动识别；中文乱码时可明确填写 `cp936`，UTF-8 服务也可填写 `utf-8`。
+- FTP 服务端会根据 `FEAT` 自动选择 UTF-8 或 CP936；自动模式遇到解码错误时会以 CP936 重试目录列表。
+- 修复不支持 `MLSD` 的 FTP 服务：`NLST` 回退现在会逐项判断目录，不再把子目录全部标为文件，因此子目录可以进入。
+- 文件管理器版本提升至 3.4.1，并更新 `nova.html` 加载版本号；`files.js` 通过 `node --check`，`sources.py` 通过 `py_compile`，模拟 FTP 中文目录与文件识别测试通过。
+- 默认 `build_all.bat` 成功，包内冒烟测试输出 `package import ok`，源码与发布目录的相关文件哈希一致，发布目录仍只有 9 个最新版应用包。
+- 本次 `dist/TzyOS.zip` 大小为 20,762,897 字节，SHA-256 为 `9DA58210E9E5C9655862E12A0BBFB001A78F11467A8E32C6D75A3748161B90DA`。
+- 本版仅同步到 SMB 目标 `\\10.10.28.10\Temp\TZY\NovaOS-Stealth`；目标中的文件管理器、入口、FTP 后端和 ZIP 哈希均与源一致，`dist/TzyOS/apps_repo` 为 9 个最新版包，完整项目与发布树 dry-run 均返回 0。
+
 ## 2026-10-12 NovelDL TXT 文本兼容修复
 
 - 已定位文本编辑器提示“不是文本文件”的原因：NovelDL 1.0.1 将 TXT 转为 Base64 后通过 VFS 的 `data` 字段保存，VFS 因而把节点记为二进制 `kind: "bin"`；电脑直接复制的 TXT 使用文本路径，所以可正常打开。

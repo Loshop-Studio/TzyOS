@@ -194,6 +194,17 @@ def _ftp_connect(b):
     ftp = ftplib.FTP()
     ftp.connect(host, int(b.get("port", 21) or 21), timeout=10)
     ftp.login(str(b.get("user", "") or "anonymous"), str(b.get("pass", "") or ""))
+    # 许多局域网 FTP 服务仍使用 GBK/CP936；UTF-8 服务通常会在 FEAT 中声明。
+    # 允许前端显式传 encoding，同时自动避免中文目录名被 latin-1 解码成乱码。
+    requested_encoding = str(b.get("encoding", "") or "").strip()
+    if requested_encoding:
+        ftp.encoding = requested_encoding
+    else:
+        try:
+            feat = ftp.sendcmd("FEAT").upper()
+            ftp.encoding = "utf-8" if "UTF8" in feat or "UTF-8" in feat else "cp936"
+        except Exception:
+            ftp.encoding = "utf-8"
     return ftp
 
 
@@ -216,12 +227,32 @@ def api_ftp(method):
                         continue
                     items.append({"name": name, "dir": facts.get("type") == "dir",
                                   "size": int(facts.get("size") or 0), "mtime": 0})
-            except Exception:
-                for name in ftp.nlst(path or "."):
-                    name = name.split("/")[-1]
+            except Exception as list_error:
+                base = ftp.pwd()
+                try:
+                    names = ftp.nlst(path or ".")
+                except UnicodeDecodeError:
+                    # 部分服务器声明 UTF8，但 NLST 实际仍返回 GBK/CP936。
+                    # 只有自动模式才重试，用户显式选择的编码保持不变。
+                    if str(b.get("encoding", "") or "").strip() or ftp.encoding == "cp936":
+                        raise
+                    ftp.encoding = "cp936"
+                    names = ftp.nlst(path or ".")
+                for raw_name in names:
+                    name = str(raw_name).replace("\\", "/").rstrip("/").split("/")[-1]
                     if name in (".", ".."):
                         continue
-                    items.append({"name": name, "dir": False, "size": 0, "mtime": 0})
+                    is_dir = False
+                    try:
+                        ftp.cwd((path.rstrip("/") + "/" + name) if path else name)
+                        is_dir = True
+                        ftp.cwd(base)
+                    except Exception:
+                        try:
+                            ftp.cwd(base)
+                        except Exception:
+                            pass
+                    items.append({"name": name, "dir": is_dir, "size": 0, "mtime": 0})
             return _api_json({"ok": True, "path": path, "entries": _sort_entries(items)})
         if op == "get":
             buf = io.BytesIO()

@@ -12,7 +12,7 @@
  * v3.2.0：离线空间内的移动 / 复制 / 压缩文件夹：
  *   移动、复制走文件夹选择对话框，支持文件与文件夹递归（仅离线空间）；
  *   单个文件夹可直接「压缩」为 zip（沿用本地 zip 打包）。
- * v3.4.0：VFS「复制到…」改为目标浏览窗口，可选电脑 / FTP / SMB 并逐级选择目录。
+ * v3.4.1：VFS「复制到…」可选电脑 / VFS / FTP / SMB；FTP 可配置文件名编码。
  * Loshop & Cpt
  * ============================================================ */
 (function () {
@@ -67,7 +67,7 @@
     name: "文件管理",
     icon: "🗂",
     tone: "tone-red",
-    version: "3.4.0",
+    version: "3.4.1",
     open: function (root, OS) { build(root, OS); },
     onArg: function (root, arg) {
       // 系统级文件选择对话框：OS.pickFile() 调起
@@ -1265,6 +1265,17 @@
     /* ---------- VFS 复制到电脑 / FTP / SMB：先选目标源，再选目录 ---------- */
     function copyTargetApi(key, conn, op, path, body) {
       body = Object.assign({}, conn || {}, body || {}, { op: op, path: path });
+      if (key === "vfs") {
+        if (op === "list") return OS.vfs.list(path);
+        if (op === "mkdir") return OS.vfs.mkdir(path);
+        if (op === "put") return OS.vfs.put(path, {
+          name: path.split("/").pop(),
+          mime: body.mime,
+          text: body.content,
+          data: body.data
+        });
+        return Promise.resolve({ ok: false, error: "VFS 不支持该操作" });
+      }
       if (key === "fs") return OS.api.fs(op, body);
       if (key === "ftp") return OS.api.ftp(body);
       return OS.api.smb(body);
@@ -1280,15 +1291,16 @@
     function pickCopyTarget(title, entry) {
       return new Promise(function (resolve) {
         var key = "fs", conn = null, cur = "";
+        var sourceEntryPath = joinPath(state.path, entry.name);
         var mask = OS.h("div", "nv-mask nv-modal-top"), dlg = OS.h("div", "nv-dialog");
         dlg.style.maxWidth = "500px";
         dlg.appendChild(OS.h("h3", "", title));
         var tabs = OS.h("div", "nv-seg");
         var tabBtns = {};
-        [{ key: "fs", label: "电脑" }, { key: "ftp", label: "FTP" }, { key: "smb", label: "SMB" }].forEach(function (x) {
+        [{ key: "fs", label: "电脑" }, { key: "vfs", label: "VFS" }, { key: "ftp", label: "FTP" }, { key: "smb", label: "SMB" }].forEach(function (x) {
           var b = OS.h("button", x.key === key ? "on" : "", x.label); tabBtns[x.key] = b;
           b.addEventListener("click", function () {
-            key = x.key; conn = key === "fs" ? null : (OS.store.get(CFG_KEYS[key], {}) || {});
+            key = x.key; conn = (key === "ftp" || key === "smb") ? (OS.store.get(CFG_KEYS[key], {}) || {}) : null;
             cur = conn && conn.path ? String(conn.path) : "";
             Object.keys(tabBtns).forEach(function (k) { tabBtns[k].className = k === key ? "on" : ""; }); load();
           }); tabs.appendChild(b);
@@ -1301,7 +1313,7 @@
         mask.appendChild(dlg); document.body.appendChild(mask);
         function close(v) { if (mask.parentNode) mask.parentNode.removeChild(mask); resolve(v); }
         function render() {
-          OS.clear(crumbs2); var root = OS.h("span", "nv-crumb", key === "fs" ? "电脑" : key.toUpperCase());
+          OS.clear(crumbs2); var root = OS.h("span", "nv-crumb", key === "fs" ? "电脑" : (key === "vfs" ? "VFS" : key.toUpperCase()));
           root.addEventListener("click", function () { cur = ""; load(); }); crumbs2.appendChild(root);
           var parts = cur ? cur.replace(/^\/+/, "").split("/") : [], acc = "";
           parts.forEach(function (p) { acc = acc ? acc + "/" + p : p; crumbs2.appendChild(document.createTextNode(" / ")); var b = OS.h("span", "nv-crumb", p); var target = acc; b.addEventListener("click", function () { cur = target; load(); }); crumbs2.appendChild(b); });
@@ -1317,7 +1329,9 @@
             var dirs = (r.entries || []).filter(function (e) { return e.dir; });
             dirs.forEach(function (e) { var row = OS.h("div", "nv-row"); row.appendChild(OS.h("div", "nv-row-ico", "📁")); row.appendChild(OS.h("div", "nv-row-name", e.name)); row.addEventListener("click", function () { cur = joinPath(cur, e.name); load(); }); box.appendChild(row); });
             if (!dirs.length) box.appendChild(OS.h("div", "nv-empty", "（无子文件夹）"));
-            hint.textContent = "目标：" + (cur ? "/" + cur : "/（根目录）");
+            var forbidden = key === "vfs" && entry.dir && (cur === sourceEntryPath || cur.indexOf(sourceEntryPath + "/") === 0);
+            ok.disabled = forbidden;
+            hint.textContent = forbidden ? "不能复制到源文件夹自身或其子目录" : "目标：" + (cur ? "/" + cur : "/（根目录）");
           })["catch"](function (e) { OS.clear(box); box.appendChild(OS.h("div", "nv-empty", (e && e.message) || "读取目录失败")); ok.disabled = true; });
         }
         cancel.addEventListener("click", function () { close(null); }); mask.addEventListener("click", function (e) { if (e.target === mask) close(null); });
@@ -1502,7 +1516,8 @@
         ["端口", "port", "21"],
         ["用户名", "user", "匿名可留空"],
         ["密码", "pass", ""],
-        ["起始目录", "path", "留空为根目录"]
+        ["起始目录", "path", "留空为根目录"],
+        ["文件名编码", "encoding", "自动；中文乱码可填 cp936"]
       ] : [
         ["主机", "host", "如 192.168.1.10"],
         ["共享名", "share", "如 share"],
