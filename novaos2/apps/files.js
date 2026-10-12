@@ -12,6 +12,7 @@
  * v3.2.0：离线空间内的移动 / 复制 / 压缩文件夹：
  *   移动、复制走文件夹选择对话框，支持文件与文件夹递归（仅离线空间）；
  *   单个文件夹可直接「压缩」为 zip（沿用本地 zip 打包）。
+ * v3.4.0：VFS「复制到…」改为目标浏览窗口，可选电脑 / FTP / SMB 并逐级选择目录。
  * Loshop & Cpt
  * ============================================================ */
 (function () {
@@ -66,7 +67,7 @@
     name: "文件管理",
     icon: "🗂",
     tone: "tone-red",
-    version: "3.3.0",
+    version: "3.4.0",
     open: function (root, OS) { build(root, OS); },
     onArg: function (root, arg) {
       // 系统级文件选择对话框：OS.pickFile() 调起
@@ -469,16 +470,18 @@
           var bDl = OS.h("button", "nv-row-act", "下载");
           bDl.addEventListener("click", function (ev) { ev.stopPropagation(); downloadEntry(e); });
           row.appendChild(bDl);
-          var bCopy = OS.h("button", "nv-row-act", "复制到…");
-          bCopy.addEventListener("click", function (ev) { ev.stopPropagation(); copyTo(e); });
-          row.appendChild(bCopy);
+          if (state.source !== "vfs") {
+            var bCopy = OS.h("button", "nv-row-act", "复制到…");
+            bCopy.addEventListener("click", function (ev) { ev.stopPropagation(); copyTo(e); });
+            row.appendChild(bCopy);
+          }
         }
         // 离线空间内：移动 / 复制（文件与文件夹），文件夹另可压缩
         if (state.source === "vfs") {
           var bMove = OS.h("button", "nv-row-act", "移动");
           bMove.addEventListener("click", function (ev) { ev.stopPropagation(); moveEntry(e); });
           row.appendChild(bMove);
-          var bCopyIn = OS.h("button", "nv-row-act", "复制");
+          var bCopyIn = OS.h("button", "nv-row-act", "复制到…");
           bCopyIn.addEventListener("click", function (ev) { ev.stopPropagation(); copyEntryVfs(e); });
           row.appendChild(bCopyIn);
           if (e.dir) {
@@ -1259,47 +1262,88 @@
         });
     }
 
-    /* ---------- 离线空间内：复制（文件/文件夹递归） ---------- */
-    function copyTreeVfs(src, dst, isDir) {
-      if (!isDir) {
-        return OS.vfs.get(src).then(function (r) {
-          if (!r.ok) throw new Error(r.error || "读取失败");
-          var rec = r.text
-            ? { name: dst.split("/").pop(), mime: r.mime || "text/plain", text: r.content }
-            : { name: dst.split("/").pop(), mime: r.mime, data: r.data };
-          return OS.vfs.put(dst, rec);
-        }).then(function (r) {
-          if (r && r.ok === false) throw new Error(r.error || "写入失败");
-          return { ok: true };
-        })["catch"](function (e) { return { ok: false, error: e.message }; });
-      }
-      return OS.vfs.mkdir(dst).then(function () { return OS.vfs.list(src); })
-        .then(function (r) {
-          if (!r.ok) throw new Error(r.error || "列目录失败");
-          var chain = Promise.resolve();
-          (r.entries || []).forEach(function (e) {
-            chain = chain.then(function () {
-              return copyTreeVfs(joinPath(src, e.name), joinPath(dst, e.name), e.dir);
-            });
+    /* ---------- VFS 复制到电脑 / FTP / SMB：先选目标源，再选目录 ---------- */
+    function copyTargetApi(key, conn, op, path, body) {
+      body = Object.assign({}, conn || {}, body || {}, { op: op, path: path });
+      if (key === "fs") return OS.api.fs(op, body);
+      if (key === "ftp") return OS.api.ftp(body);
+      return OS.api.smb(body);
+    }
+    function copyTargetList(key, conn, path) {
+      return copyTargetApi(key, conn, "list", path).then(function (r) {
+        if (r && r.ok && (key === "ftp" || key === "smb")) {
+          remoteDirCache[remoteConnKey(key, conn) + "|" + path] = { at: Date.now(), entries: (r.entries || []).slice() };
+        }
+        return r;
+      });
+    }
+    function pickCopyTarget(title, entry) {
+      return new Promise(function (resolve) {
+        var key = "fs", conn = null, cur = "";
+        var mask = OS.h("div", "nv-mask nv-modal-top"), dlg = OS.h("div", "nv-dialog");
+        dlg.style.maxWidth = "500px";
+        dlg.appendChild(OS.h("h3", "", title));
+        var tabs = OS.h("div", "nv-seg");
+        var tabBtns = {};
+        [{ key: "fs", label: "电脑" }, { key: "ftp", label: "FTP" }, { key: "smb", label: "SMB" }].forEach(function (x) {
+          var b = OS.h("button", x.key === key ? "on" : "", x.label); tabBtns[x.key] = b;
+          b.addEventListener("click", function () {
+            key = x.key; conn = key === "fs" ? null : (OS.store.get(CFG_KEYS[key], {}) || {});
+            cur = conn && conn.path ? String(conn.path) : "";
+            Object.keys(tabBtns).forEach(function (k) { tabBtns[k].className = k === key ? "on" : ""; }); load();
+          }); tabs.appendChild(b);
+        });
+        var crumbs2 = OS.h("div", "nv-crumbs"), box = OS.h("div", "nv-list");
+        box.style.cssText = "max-height:46vh;border:1px solid #e8e0cf;border-radius:10px;background:#fff;";
+        var hint = OS.h("div", "nv-status-line", ""), actions = OS.h("div", "nv-dialog-actions");
+        var cancel = OS.h("button", "nv-btn ghost", "取消"), ok = OS.h("button", "nv-btn primary", "复制到此目录");
+        actions.appendChild(cancel); actions.appendChild(ok); dlg.appendChild(tabs); dlg.appendChild(crumbs2); dlg.appendChild(box); dlg.appendChild(hint); dlg.appendChild(actions);
+        mask.appendChild(dlg); document.body.appendChild(mask);
+        function close(v) { if (mask.parentNode) mask.parentNode.removeChild(mask); resolve(v); }
+        function render() {
+          OS.clear(crumbs2); var root = OS.h("span", "nv-crumb", key === "fs" ? "电脑" : key.toUpperCase());
+          root.addEventListener("click", function () { cur = ""; load(); }); crumbs2.appendChild(root);
+          var parts = cur ? cur.replace(/^\/+/, "").split("/") : [], acc = "";
+          parts.forEach(function (p) { acc = acc ? acc + "/" + p : p; crumbs2.appendChild(document.createTextNode(" / ")); var b = OS.h("span", "nv-crumb", p); var target = acc; b.addEventListener("click", function () { cur = target; load(); }); crumbs2.appendChild(b); });
+        }
+        function load() {
+          render(); OS.clear(box); box.appendChild(OS.h("div", "nv-loading", "加载中…")); ok.disabled = false;
+          if ((key === "ftp" || key === "smb") && (!conn || !conn.host || !conn.share && key === "smb")) {
+            OS.clear(box); box.appendChild(OS.h("div", "nv-empty", "请先在对应源中填写连接信息")); ok.disabled = true; return;
+          }
+          copyTargetList(key, conn, cur).then(function (r) {
+            OS.clear(box); if (!r || !r.ok) { box.appendChild(OS.h("div", "nv-empty", (r && r.error) || "读取目录失败")); ok.disabled = true; return; }
+            if (cur) { var up = OS.h("div", "nv-row"); up.appendChild(OS.h("div", "nv-row-ico", "↩")); up.appendChild(OS.h("div", "nv-row-name", "上一级")); up.addEventListener("click", function () { cur = parentPath(cur); load(); }); box.appendChild(up); }
+            var dirs = (r.entries || []).filter(function (e) { return e.dir; });
+            dirs.forEach(function (e) { var row = OS.h("div", "nv-row"); row.appendChild(OS.h("div", "nv-row-ico", "📁")); row.appendChild(OS.h("div", "nv-row-name", e.name)); row.addEventListener("click", function () { cur = joinPath(cur, e.name); load(); }); box.appendChild(row); });
+            if (!dirs.length) box.appendChild(OS.h("div", "nv-empty", "（无子文件夹）"));
+            hint.textContent = "目标：" + (cur ? "/" + cur : "/（根目录）");
+          })["catch"](function (e) { OS.clear(box); box.appendChild(OS.h("div", "nv-empty", (e && e.message) || "读取目录失败")); ok.disabled = true; });
+        }
+        cancel.addEventListener("click", function () { close(null); }); mask.addEventListener("click", function (e) { if (e.target === mask) close(null); });
+        ok.addEventListener("click", function () { close({ key: key, path: cur, conn: conn }); }); load();
+      });
+    }
+    function copyTreeVfsTo(src, dst, target) {
+      function putFile(r) { var body = r.text ? { content: r.content } : { data: r.data }; return copyTargetApi(target.key, target.conn, "put", dst, body); }
+      return OS.vfs.get(src).then(function (r) {
+        if (r.ok) return putFile(r);
+        return OS.vfs.list(src).then(function (dir) {
+          if (!dir.ok) throw new Error(dir.error || "读取失败");
+          return copyTargetApi(target.key, target.conn, "mkdir", dst).then(function (made) {
+            if (made && made.ok === false) throw new Error(made.error || "创建目录失败");
+            var chain = Promise.resolve(); (dir.entries || []).forEach(function (e) { chain = chain.then(function () { return copyTreeVfsTo(joinPath(src, e.name), joinPath(dst, e.name), target); }); }); return chain;
           });
-          return chain;
-        }).then(function () { return { ok: true }; })
-        ["catch"](function (e) { return { ok: false, error: e.message }; });
+        });
+      });
     }
     function copyEntryVfs(entry) {
       var src = joinPath(state.path, entry.name);
-      pickFolder("复制「" + entry.name + "」到…", state.path, entry.dir ? src : null)
-        .then(function (dst) {
-          if (dst === null) return;
-          if (entry.dir && dst.indexOf(src + "/") === 0) { OS.toast("不能复制到自身子文件夹"); return; }
-          var target = joinPath(dst, entry.name);
-          statusLine.textContent = "正在复制 " + entry.name + "…";
-          OS.log("files", "复制 [" + state.source + "] " + src + " → " + target);
-          copyTreeVfs(src, target, entry.dir).then(function (st) {
-            if (st.ok) { OS.toast("已复制到 " + (dst ? "/" + dst : "/")); refresh(); }
-            else OS.toast(st.error || "复制失败");
-          });
-        });
+      pickCopyTarget("复制「" + entry.name + "」到…", entry).then(function (target) {
+        if (!target) return; var dst = joinPath(target.path, entry.name); statusLine.textContent = "正在复制 " + entry.name + "…";
+        OS.log("files", "复制 [vfs] " + src + " → [" + target.key + "] " + dst);
+        copyTreeVfsTo(src, dst, target).then(function (r) { if (r && r.ok === false) throw new Error(r.error || "写入失败"); OS.toast("已复制到 " + target.key.toUpperCase()); statusLine.textContent = "复制完成"; refresh(); })["catch"](function (e) { OS.toast("复制失败：" + e.message); statusLine.textContent = "复制失败"; });
+      });
     }
 
     function downloadEntry(entry, cb) {

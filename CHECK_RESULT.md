@@ -40,3 +40,15 @@
 - 重新运行默认 `build_all.bat` 成功，包内运行时冒烟测试输出 `package import ok`；`dist/TzyOS/apps_repo` 仍只包含 9 个应用的最新版。
 - 本次 `dist/TzyOS.zip` 大小为 20,760,803 字节，SHA-256 为 `A9B3B790F8E9A2BCDB0CF2CE9764F3FD64F46753AB0E2EF929638838872FF3B8`。
 - Phi 修复版已覆盖同步到 `F:\NovaOS-Stealth` 和 `\\10.10.28.10\Temp\TZY\NovaOS-Stealth`；两个目标的 Phi 入口文件与 ZIP 哈希均与源目录一致，`dist/TzyOS/apps_repo` 均为 9 个最新版包，项目与发布树 dry-run 均返回 0。
+
+## 2026-10-12 文件管理器 3.4.0
+
+- VFS 文件和文件夹的操作按钮已统一改为“复制到…”，打开独立目标选择窗口，不再要求输入目标序号。
+- 目标窗口可切换电脑、FTP、SMB，并读取对应源的目录列表、逐级进入文件夹、通过面包屑或“上一级”返回，最后选择“复制到此目录”。
+- FTP/SMB 使用文件管理器中已保存的连接信息并从已配置的起始目录打开；未配置或目录读取失败时在窗口内明确提示并禁止确认。
+- 支持 VFS 文件和文件夹递归复制到电脑、FTP、SMB；目标目录创建或文件写入失败会终止并显示原因。
+- 文件管理器版本提升至 3.4.0，`nova.html` 的加载版本号已更新，避免平板继续使用旧脚本。
+- `files.js` 和 `os.js` 均通过 `node --check`，关键路径静态检查与 `git diff --check` 通过；构建后的 `files.js`、`nova.html` 与源码哈希一致。
+- 默认 `build_all.bat` 成功，包内运行时冒烟测试输出 `package import ok`，`dist/TzyOS/apps_repo` 仍只有 9 个最新版应用包。
+- 本次 `dist/TzyOS.zip` 大小为 20,761,701 字节，SHA-256 为 `DD07C53540F6CDA352F9D2C59787B359AC2B3B7EBED6B6A1756EBB1678A7FA2F`。
+- 按要求仅同步到 SMB 目标 `\\10.10.28.10\Temp\TZY\NovaOS-Stealth`，未访问已拔出的 U 盘；目标中的 `files.js`、`nova.html`、`dist/TzyOS.zip` 哈希均与源目录一致，发布目录为 9 个最新版应用包，完整项目和发布树 dry-run 均返回 0。
