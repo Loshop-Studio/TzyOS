@@ -478,7 +478,16 @@
     ping: function () { return netCall("api/ping", {}); },
     systemInfo: function () { return netCall("api/system-info", {}); },
     // 系统维护（走挂载点同源端点，平板与电脑均可调用）
-    sysUpdate: function () { return netCall("sys/update", {}); },
+    sysUpdate: function () {
+      return netCall("sys/update", {}).then(function (result) {
+        if (!result || !result.ok) return result;
+        return updateInstalledAppsFromRepo().then(function (appsResult) {
+          result.appsUpdated = appsResult.updated;
+          result.appErrors = appsResult.errors;
+          return result;
+        });
+      });
+    },
     sysLog: function (logs) { return netCall("sys/log", { logs: logs }); },
     restoreCatalog: function () { return netCall("sys/restore-catalog", {}); },
     restorePackage: function (name) {
@@ -2348,6 +2357,35 @@
     cmpVer: cmpVer,
     isUser: function (id) { return !!(apps[id] && apps[id].def.user); }
   };
+
+  // A system update also upgrades applications that are already installed on
+  // this tablet.  It never installs an app the user does not currently have,
+  // and never downgrades a newer local version.
+  function updateInstalledAppsFromRepo() {
+    var installed = appsRegGet(), updated = [], errors = [];
+    return appCatalog().then(function (catalog) {
+      var remote = {};
+      (catalog || []).forEach(function (a) { if (a && a.id) remote[a.id] = a; });
+      var chain = Promise.resolve();
+      installed.forEach(function (cur) {
+        var next = cur && remote[cur.id];
+        if (!next || !next.file || cmpVer(next.version, cur.version) <= 0) return;
+        chain = chain.then(function () {
+          return appDownload(next.file).then(function (r) {
+            if (!r || !r.ok || !r.blob) throw new Error((r && r.error) || "下载失败");
+            return appInstall(r.blob);
+          }).then(function () {
+            updated.push(next.id + "@" + next.version);
+          })["catch"](function (e) {
+            errors.push(next.id + "：" + ((e && e.message) || e));
+          });
+        });
+      });
+      return chain.then(function () { return { updated: updated, errors: errors }; });
+    })["catch"](function (e) {
+      return { updated: updated, errors: ["读取应用仓库失败：" + ((e && e.message) || e)] };
+    });
+  }
 
 
   function winSize() {

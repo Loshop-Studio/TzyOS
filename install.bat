@@ -2,8 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
-rem DNS (port 53) and HTTP (port 80) listeners require elevation. Reopen
-rem this installer elevated so mode selection and the service share that token.
+rem Installation writes machine/network mode settings and performs preflight.
+rem Service startup is intentionally handled only by start.bat.
 net session >nul 2>&1
 if errorlevel 1 (
     echo Requesting administrator privileges...

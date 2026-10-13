@@ -18,6 +18,10 @@ rem ============================================================================
 rem Use /nohotspot for LAN mode (no hotspot; tablet's Wi-Fi DNS points at this PC)
 set "NO_HOTSPOT=0"
 if /i "%~1"=="/nohotspot" set "NO_HOTSPOT=1"
+rem Installation stores the selected mode in config.json.  Honour it when
+rem start.bat is launched without the optional /nohotspot argument.
+findstr /r /i /c:"\"lan_mode\"[ ]*:[ ]*true" "%~dp0config.json" >nul 2>&1
+if not errorlevel 1 set "NO_HOTSPOT=1"
 
 rem ---- Auto elevate (ports 53/80 and hotspot control require admin) ----
 net session >nul 2>&1

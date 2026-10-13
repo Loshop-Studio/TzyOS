@@ -73,6 +73,21 @@ def main():
     slog("info", "boot", "HTTP :%s / ADMIN 127.0.0.1:%s 已监听（lan_mode=%s）" %
          (int(cfg("http_port", 80)), int(cfg("admin_port", 8899)), lan_mode))
 
+    # Start the novel worker during service boot so its health/log state is
+    # visible immediately.  The proxy still calls ensure_running() on every
+    # request, so a transient startup failure remains recoverable.
+    if cfg("novel_enable", True):
+        try:
+            from novacore.novel_dl import ensure_running
+            novel_ok, novel_err = ensure_running(wait=15.0)
+            if novel_ok:
+                slog("info", "novel", "小说后端已启动并通过健康检查（port=%s）" %
+                     int(cfg("novel_port", 18089)))
+            else:
+                slog("error", "novel", "小说后端启动失败：%s" % novel_err)
+        except Exception as exc:
+            slog("error", "novel", "小说后端初始化异常：%s" % exc)
+
     print("=" * 60)
     print(" Tzy OS stealth 注入服务已启动")
     print(" 配置界面      : http://127.0.0.1:%d/" % int(cfg("admin_port", 8899)))

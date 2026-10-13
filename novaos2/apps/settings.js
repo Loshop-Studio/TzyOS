@@ -418,8 +418,15 @@
       OS.api.sysUpdate().then(function (r) {
         btnSysUpdate.disabled = false;
         if (r && r.ok) {
-          OS.log("settings", "系统更新完成，刷新版本文件 " + (r.changed || 0) + " 个");
-          OS.toast(r.changed > 0 ? "已刷新 " + r.changed + " 个文件版本，重开页面生效" : "已是最新");
+          var appCount = (r.appsUpdated || []).length;
+          var errCount = (r.appErrors || []).length;
+          OS.log("settings", "系统更新完成，刷新版本文件 " + (r.changed || 0) +
+            " 个，升级应用 " + appCount + " 个，失败 " + errCount + " 个");
+          var summary = "系统资源已检查：刷新 " + (r.changed || 0) + " 项；应用升级 " +
+            appCount + " 项" + (errCount ? "；失败 " + errCount + " 项" : "") + "。\n\n立即重新加载以应用更新？";
+          OS.dlg.confirm(summary, "系统更新完成").then(function (reload) {
+            if (reload) location.reload();
+          });
         } else {
           OS.log("settings", "系统更新失败：" + ((r && r.error) || "未知"), "error");
           OS.toast((r && r.error) || "更新失败：电脑服务不可用");

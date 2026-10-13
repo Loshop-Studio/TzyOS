@@ -166,10 +166,10 @@ def main():
             sys.exit(1)
     set_mode(mode)
     if not preflight():
-        print("[!] Preflight failed; service was not started.")
+        print("[!] Preflight failed; installation was not completed.")
         sys.exit(1)
-    print("[*] Starting service ... (mode %d)" % mode)
-    subprocess.call([sys.executable, os.path.join(ROOT, "novaosd.py")], cwd=ROOT)
+    print("[*] Installation complete (mode %d)." % mode)
+    print("[*] Run start.bat when you want to start the service.")
 
 
 if __name__ == "__main__":

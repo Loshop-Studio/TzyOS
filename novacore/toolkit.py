@@ -18,9 +18,11 @@ def bump_entry_versions():
     root = novaos_dir()
     changed = []
     errors = []
-    # 支持 相对路径（apps/x.js）、根相对（/apps/x.js）两种写法；
-    # 排除 http(s):// 等带协议的绝对外链与 data: 内联。
-    pat = re.compile(r'((?:src|href)=")(/?(?!https?:|data:|#)[^"?]+)\?v=\d+(")')
+    # Match every quoted local src/href, whether it already has a numeric,
+    # hand-written, or no cache version.  Older code only matched ?v=digits,
+    # leaving core files such as os.js?v=release-name and unversioned local
+    # libraries permanently pinned in the tablet's one-year HTTP cache.
+    pat = re.compile(r'((?:src|href)=")((?!https?:|data:|blob:|#|//)[^"?#]+)(?:\?[^"#]*)?(#[^"]*)?(")', re.I)
     skip_dirs = {"dist", "archive", "logs", "node_modules", "__pycache__", ".git"}
 
     def bump_html(html_path):
@@ -38,7 +40,7 @@ def bump_entry_versions():
                 return m.group(0)
             v = str(int(os.path.getmtime(fp)))
             old = m.group(0)
-            new = m.group(1) + rel + "?v=" + v + m.group(3)
+            new = m.group(1) + rel + "?v=" + v + (m.group(3) or "") + m.group(4)
             if new != old and rel not in changed:
                 changed.append(rel)
             return new
