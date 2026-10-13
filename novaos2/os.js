@@ -1702,15 +1702,19 @@
           }
           for (d in m.dirs) if (d !== "") nDirs++;
           var est = navigator.storage && navigator.storage.estimate ? navigator.storage.estimate() : null;
-          var fallback = { ok: true, bytes: sum, logicalBytes: sum, storedBytes: stored,
+          // `bytes` is the VFS' physical footprint.  `logicalBytes` remains the
+          // uncompressed file total for file properties and compression stats.
+          // navigator.storage.usage covers the whole origin (HTTP cache, app
+          // packages and other IndexedDB data), so it must not be presented as
+          // this VFS' usage.
+          var fallback = { ok: true, bytes: stored, logicalBytes: sum, storedBytes: stored,
             savedBytes: Math.max(0, sum - stored), compressedFiles: compressed,
             files: nFiles, dirs: nDirs, max: 256 * 1024 * 1024 };
           if (!est) return fallback;
           return est.then(function (q) {
-            // estimate 是整个源的配额；usage 取本库时浏览器无细分接口，取 max(文件总和, 源已用)
             return {
               ok: true,
-              bytes: Math.max(sum, (q && q.usage) || sum),
+              bytes: stored,
               logicalBytes: sum, storedBytes: stored,
               savedBytes: Math.max(0, sum - stored), compressedFiles: compressed,
               files: nFiles, dirs: nDirs,

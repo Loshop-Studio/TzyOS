@@ -115,3 +115,6 @@
 - `build_all.bat` 构建成功，包内运行时 smoke test 输出 `package import ok`；`dist/TzyOS/apps_repo` 仅保留 9 个应用的最新版，其中 Learning Toolbox 为 3.7.1。
 - 本次 `dist/TzyOS.zip` SHA-256 为 `198DF6607238097DAACA73FFA8762EF6E48432C4C04CCB8BF2C553C30220D9E3`。
 - 完整项目和发布树已同步到 SMB `\\10.10.28.10\Temp\TZY\NovaOS-Stealth` 及 U 盘 `F:\TZY\NovaOS-Stealth`；两处 ZIP 哈希均与本地一致，发布树均为 9 个最新版应用包。
+- 本次生成的 `dist/TzyOS.zip` SHA-256 为 `ED0894FC19FB3FF0E787495D2A6D47D64F57219EDFF45D4F7F193394BD68F7E8`；发布树含 1,064 个文件、46,606,455 字节，含 9 个最新版应用包。
+- Git 提交为 `5d21cef`（Finalize activation and Win7 startup release），全部 43 个源 `.tzyp` 软件包已纳入 Git 追踪；`dist` 仅包含干净运行代码、运行时和每个应用的最新版包。
+- 已将项目源码与发布目录镜像同步到 `\\10.10.28.10\Temp\TZY\NovaOS-Stealth`；共享目录同步命令完成且无 Robocopy 错误，发布包哈希与本地一致。

@@ -131,6 +131,15 @@ def ensure_running(wait=30.0):
                 return True, ""
             p = _PROC.get("p")
             if p is not None and p.poll() is not None:
+                # Another service instance may already own the configured port
+                # (for example after the parent service was restarted).  In that
+                # case our newly spawned child exits with code 1, but the backend
+                # is in fact usable.  Re-check health before reporting a false
+                # startup failure to the tablet.
+                if _healthy(timeout=3.0):
+                    _PROC["p"] = None
+                    slog("info", "novel", "spawned process exited but an existing backend is healthy")
+                    return True, ""
                 msg = "小说后端启动后立即退出（码 %s），详见 logs/novel.log" % p.returncode
                 slog("error", "novel", msg)
                 return False, msg

@@ -62,13 +62,36 @@ class LanChatState(object):
         fingerprint = str(payload.get("fingerprint") or "")[:128]
         with self.condition:
             self._cleanup()
+            previous = self.devices.get(device_id)
             self.devices[device_id] = {
                 "deviceId": device_id, "name": name,
                 "fingerprint": fingerprint, "lastSeen": self._now(),
                 "capabilities": payload.get("capabilities") or {},
             }
             self.events.setdefault(device_id, [])
+            if previous and previous.get("name") != name:
+                for peer_id in self.devices:
+                    if peer_id != device_id:
+                        self._push(peer_id, "device-update", {
+                            "deviceId": device_id, "name": name,
+                            "fingerprint": fingerprint,
+                        })
+                self.condition.notify_all()
             return {"ok": True, "device": self.devices[device_id]}, 200
+
+    def group_message(self, source_id, message):
+        with self.condition:
+            self._cleanup()
+            if source_id not in self.devices:
+                return {"ok": False, "error": "设备尚未注册"}, 401
+            if not isinstance(message, dict):
+                return {"ok": False, "error": "消息无效"}, 400
+            payload = {"from": source_id, "message": message}
+            for device_id in self.devices:
+                if device_id != source_id:
+                    self._push(device_id, "group-message", payload)
+            self.condition.notify_all()
+            return {"ok": True}, 200
 
     def create_pair(self, device_id):
         with self.condition:
@@ -239,6 +262,10 @@ def handle_lan_request(subpath, request):
         body = request.get_json(silent=True) or {}
         return json_result(*STATE.relay(
             str(body.get("from") or "").strip(), str(body.get("to") or "").strip(), body.get("message")))
+    if subpath == "group" and request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        return json_result(*STATE.group_message(
+            str(body.get("from") or "").strip(), body.get("message")))
     if subpath == "file/upload" and request.method == "POST":
         try:
             return json_result(*STATE.upload_file(

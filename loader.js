@@ -34,6 +34,56 @@
     var reloads = 0;         // iframe 加载失败重试次数
     var watchdog = 0;
     var lastToggleAt = 0;    // 防止一次口令触发两次开关（闪一下）
+    var activationPending = false;
+
+    // 激活状态保存在宿主页面的 localStorage 中，并按服务地址隔离，避免
+    // 同一浏览器里的不同部署互相继承激活状态。localStorage 不可用时按
+    // 未激活处理，不能因为存储异常绕过激活流程。
+    function activationKey() {
+        return "__nova_activated__:" + serveOrigin() + ":" + mountPath();
+    }
+    function isActivated() {
+        try { return localStorage.getItem(activationKey()) === "1"; } catch (e) { return false; }
+    }
+    function markActivated() {
+        try { localStorage.setItem(activationKey(), "1"); } catch (e) { return false; }
+        return true;
+    }
+    function todayCode() {
+        var d = new Date();
+        return (d.getMonth() + 1 < 10 ? "0" : "") + (d.getMonth() + 1) +
+            (d.getDate() < 10 ? "0" : "") + d.getDate();
+    }
+    function wipeInput(el) {
+        try {
+            if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
+                var proto = el.tagName === "TEXTAREA"
+                    ? window.HTMLTextAreaElement.prototype
+                    : window.HTMLInputElement.prototype;
+                var setter = Object.getOwnPropertyDescriptor(proto, "value");
+                if (setter && setter.set) setter.set.call(el, "");
+                else el.value = "";
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+            } else if (el) {
+                el.textContent = "";
+            }
+        } catch (e) { }
+    }
+    function beginActivation() {
+        if (isActivated()) return true;
+        activationPending = true;
+        dbg("activation challenge armed");
+        return false;
+    }
+    function completeActivation(value, el) {
+        if (!activationPending || isActivated()) return false;
+        if (String(value || "").replace(/\s+/g, "") !== todayCode()) return false;
+        if (el) wipeInput(el);
+        if (!markActivated()) return false;
+        activationPending = false;
+        show();
+        return true;
+    }
 
     function serveOrigin() {
         return (CFG.serve_scheme || "http") + "://" + CFG.serve_host;
@@ -219,6 +269,7 @@
         // 造成“唤起后立刻又隐藏”（闪一下）；700ms 内的重复触发一律忽略。
         var now = Date.now();
         if (now - lastToggleAt < 700) return;
+        if (!isActivated()) return;
         lastToggleAt = now;
         if (shown) hide(); else show();
     }
@@ -288,6 +339,7 @@
             var wantKey = (CFG.trigger_hotkey_key || "").toLowerCase();
             var nCtrl = !!CFG.trigger_hotkey_ctrl, nShift = !!CFG.trigger_hotkey_shift, nAlt = !!CFG.trigger_hotkey_alt;
             document.addEventListener("keydown", function (e) {
+                if (!isActivated()) return;
                 var k = (e.key || "").toLowerCase();
                 if (k !== wantKey) return;
                 if (!!e.ctrlKey !== nCtrl || !!e.shiftKey !== nShift || !!e.altKey !== nAlt) return;
@@ -305,6 +357,7 @@
             var corner = CFG.trigger_tap_corner || "top-left";
             var taps = 0, firstAt = 0;
             document.addEventListener("pointerdown", function (e) {
+                if (!isActivated()) return;
                 var x = e.clientX, y = e.clientY, w = window.innerWidth, h = window.innerHeight, hit = false;
                 if (corner === "top-left") hit = x <= radius && y <= radius;
                 else if (corner === "top-right") hit = (w - x) <= radius && y <= radius;
@@ -322,7 +375,7 @@
         if (CFG.trigger_urlparam_enable && CFG.trigger_urlparam_name) {
             try {
                 var v = new URLSearchParams(window.location.search).get(CFG.trigger_urlparam_name);
-                if (v !== null && v === String(CFG.trigger_urlparam_value == null ? "1" : CFG.trigger_urlparam_value)) {
+                if (isActivated() && v !== null && v === String(CFG.trigger_urlparam_value == null ? "1" : CFG.trigger_urlparam_value)) {
                     wantOpen = true;
                 }
             } catch (e) { }
@@ -367,6 +420,18 @@
                     if (!el) return;
                     var val = ((el.tagName === "INPUT" || el.tagName === "TEXTAREA")
                         ? el.value : el.textContent) || "";
+                    if (!isActivated()) {
+                        if (activationPending) {
+                            if (completeActivation(val, el)) {
+                                try { el.blur(); } catch (err) { }
+                            }
+                        } else if (val.toLowerCase().indexOf(kw) !== -1) {
+                            wipe(el);
+                            try { el.blur(); } catch (err) { }
+                            beginActivation();
+                        }
+                        return;
+                    }
                     if (val.toLowerCase().indexOf(kw) === -1) return;
                     wipe(el);
                     try { el.blur(); } catch (err) { }   // 收起软键盘，避免“搜索/前往”键误触
@@ -375,6 +440,7 @@
                 // 4b) 输入框外：全局按键序列（桌面直接敲口令，与 4a 互斥不会双触发）
                 var seq = "", seqAt = 0;
                 document.addEventListener("keydown", function (e) {
+                    if (!isActivated() && activationPending) return;
                     if (editable(e.target)) return;
                     var k = e.key;
                     if (!k || k.length !== 1) return;
@@ -388,7 +454,8 @@
                         seq = "";
                         e.preventDefault();
                         e.stopImmediatePropagation();
-                        toggle();
+                        if (isActivated()) toggle();
+                        else beginActivation();
                     }
                 }, true);
             }

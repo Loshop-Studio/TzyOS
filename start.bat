@@ -23,7 +23,13 @@ rem ---- Auto elevate (ports 53/80 and hotspot control require admin) ----
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Requesting administrator privileges...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1','/__nova_hidden' -Verb RunAs"
+    rem PowerShell rejects a null ArgumentList item.  The normal start path
+    rem has no first argument, while /nohotspot must be preserved explicitly.
+    if "%~1"=="" (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '/__nova_hidden' -Verb RunAs"
+    ) else (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1','/__nova_hidden' -Verb RunAs"
+    )
     if errorlevel 1 (
         echo.
         echo [!] Administrator elevation failed. Right-click start.bat and choose ^"Run as administrator^".
