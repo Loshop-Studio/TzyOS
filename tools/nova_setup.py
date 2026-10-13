@@ -165,7 +165,9 @@ def main():
         if not install_deps():
             sys.exit(1)
     set_mode(mode)
-    preflight()
+    if not preflight():
+        print("[!] Preflight failed; service was not started.")
+        sys.exit(1)
     print("[*] Starting service ... (mode %d)" % mode)
     subprocess.call([sys.executable, os.path.join(ROOT, "novaosd.py")], cwd=ROOT)
 

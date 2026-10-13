@@ -1,13 +1,10 @@
 @echo off
 title Tzy OS stealth injection service (PC hotspot mode)
 
-rem Relaunch the batch file in a hidden console.  The marker is kept as an
-rem argument so the hidden child does not start another hidden child.
+rem Do not hide the first process: on Win7 a PowerShell/UAC failure otherwise
+rem appears as a red window flash with no usable error message.
 if /i "%~1"=="/__nova_hidden" goto :hidden_entry
 if /i "%~2"=="/__nova_hidden" goto :hidden_entry
-set "START_ARG=%~1"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%START_ARG%','/__nova_hidden' -WindowStyle Hidden"
-exit /b
 
 :hidden_entry
 
@@ -26,8 +23,14 @@ rem ---- Auto elevate (ports 53/80 and hotspot control require admin) ----
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Requesting administrator privileges...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1','/__nova_hidden' -Verb RunAs -WindowStyle Hidden"
-    exit /b
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1','/__nova_hidden' -Verb RunAs"
+    if errorlevel 1 (
+        echo.
+        echo [!] Administrator elevation failed. Right-click start.bat and choose ^"Run as administrator^".
+        pause
+        exit /b 1
+    )
+    exit /b 0
 )
 
 cd /d "%~dp0"
@@ -56,6 +59,14 @@ netsh advfirewall firewall delete rule name="NovaStealth DNS/HTTP" >nul 2>&1
 netsh advfirewall firewall add rule name="NovaStealth DNS/HTTP" dir=in action=allow protocol=UDP localport=53 >nul
 netsh advfirewall firewall add rule name="NovaStealth DNS/HTTP" dir=in action=allow protocol=TCP localport=80 >nul
 
+rem Windows 7 has no Mobile Hotspot/WinRT tethering API.  Force LAN mode
+rem instead of invoking the Win10-only PowerShell scripts.
+ver | find "6.1" >nul
+if not errorlevel 1 (
+    if "%NO_HOTSPOT%"=="0" echo [i] Windows 7 detected: hotspot control is unavailable; using LAN mode.
+    set "NO_HOTSPOT=1"
+)
+
 if "%NO_HOTSPOT%"=="0" (
     echo [3/4] Configuring and starting PC hotspot: %HOTSPOT_SSID%
     rem Changing SSID/password requires: stop hotspot -> write registry -> start hotspot
@@ -82,7 +93,15 @@ if "%NO_HOTSPOT%"=="0" (
 
 echo [4/4] Starting DNS + HTTP injection service...
 echo ============================================================
-"%PYEXE%" -X utf8 novaosd.py
+if /i "%PYEXE%"=="python" (
+    "%PYEXE%" novaosd.py
+) else (
+    "%PYEXE%" -X utf8 novaosd.py
+)
+if errorlevel 1 (
+    echo.
+    echo [!] Service stopped with an error. Check the newest file under logs\server-*.log.
+)
 echo.
 echo Service stopped. Run stop-hotspot.bat to turn off the PC hotspot.
 pause
