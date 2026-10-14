@@ -143,7 +143,7 @@ TzyOS\
 | `novaos2/**`（js/css/页面）、`admin/`、注入脚本 | 运行 `tools\nova_update.py --dry-run` 或管理界面/平板「立即更新」，按 mtime 刷新 HTML 里的 `?v=` 版本号，平板下次打开自动取新文件 |
 | `runtime\` 依赖变更 | 改 `build_runtime.ps1` 的 pin 列表后 `-Force` 重建，重新打包 |
 
-缓存策略：入口 HTML 为 `no-cache + ETag`（改完即生效）；js/css 一年长缓存，靠 `?v=<mtime>` 换 URL 失效。
+缓存策略：入口 HTML 为 `no-cache + ETag`（改完即生效）；js/css 一年长缓存，靠 `?v=<mtime>` 换 URL 失效。系统启动或后端恢复在线时不再自动刷新 HTTP 缓存；需要更新静态文件时运行上面的版本号更新流程。
 
 ## 7. 小说下载后端（novelsrc）
 

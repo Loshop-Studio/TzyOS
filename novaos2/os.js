@@ -305,7 +305,6 @@
           // only grant persistence after the site has been used for a while.
           requestStoragePersistence("backend-online");
           scheduleVfsMaintenance("backend-online");
-          refreshSystemCache(res.base);
           try { nvLog("info", "net", "电脑服务就绪：" + (res.base || "(同源)") +
             " wan=" + (res.info.wan ? 1 : 0) + " answer=" + res.info.answer); } catch (_) { }
         } else {
@@ -1423,34 +1422,6 @@
       return yes;
     });
     return vfsMaint.persistP;
-  }
-
-  // HTTP cache is separate from IndexedDB and cannot be made absolutely
-  // non-evictable.  Whenever the backend reconnects, refresh the exact shell
-  // resources used by this page so a later offline launch has fresh copies.
-  function refreshSystemCache(base) {
-    var key = "nova2.systemCache.refresh";
-    var last = Number(Store.get(key, 0) || 0);
-    if (Date.now() - last < 6 * 60 * 60 * 1000) return;
-    Store.set(key, Date.now());
-    var rels = ["nova.html"], seen = { "nova.html": 1 };
-    try {
-      Array.prototype.forEach.call(document.querySelectorAll("script[src],link[rel=stylesheet][href]"), function (el) {
-        var rel = el.getAttribute("src") || el.getAttribute("href") || "";
-        if (!rel || /^(data:|blob:|https?:\/\/)/i.test(rel)) return;
-        rel = rel.replace(/^\.\//, "").replace(/^\/+/, "");
-        if (!seen[rel]) { seen[rel] = 1; rels.push(rel); }
-      });
-    } catch (_) { }
-    Promise.all(rels.map(function (rel) {
-      return fetch((base || "") + rel, { cache: "reload" }).then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return true;
-      }).catch(function () { return false; });
-    })).then(function (rows) {
-      var ok = rows.filter(function (x) { return x; }).length;
-      try { nvLog("info", "storage", "系统缓存刷新 " + ok + "/" + rows.length); } catch (_) { }
-    });
   }
 
   /* ---------- 引擎一：localStorage 降级实现（旧版结构，约 5MB） ---------- */
