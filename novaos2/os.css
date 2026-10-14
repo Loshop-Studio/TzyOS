@@ -629,6 +629,7 @@ button { font-family: inherit; }
 .nv-set-row:first-of-type { border-top: none; }
 .nv-set-row .nv-set-k { -webkit-box-flex: 0; flex: none; min-width: 84px; color: #6b6252; }
 .nv-set-row .nv-set-v { -webkit-box-flex: 1; flex: 1; text-align: right; word-break: break-all; }
+.nv-set-input { width: min(100%, 220px); box-sizing: border-box; padding: 6px 8px; border: 1px solid #d5c9b2; border-radius: 6px; background: #fffdf8; color: #3a3328; }
 .nv-set-backup-panel { border-top: 1px solid #ddd3bf; margin-top: 8px; padding-top: 4px; }
 .nv-restore-select { width: min(100%, 360px); margin-bottom: 6px; }
 .nv-restore-all { display: block; margin-top: 14px; color: #5b5346; font-size: 13px; }

@@ -218,9 +218,10 @@
     return i >= 0 ? p.slice(0, i + 1) : "/";
   })();
   var BASE_KEY = "nova2.apiBase";
+  var PREFERRED_BASE_KEY = "nova2.preferredApiBase";
   var NET = {
     base: "", info: null, online: false, probing: null, waiters: [],
-    probed: false, nextProbeAt: 0
+    probed: false, nextProbeAt: 0, generation: 0
   };
 
   function lanCandidates() {
@@ -236,6 +237,18 @@
     add(cfg.local);
     var mount = cfg.mount || MOUNT_PATH;
     return ips.map(function (ip) { return "http://" + ip + mount; });
+  }
+
+  function normalizePreferredBase(value) {
+    var raw = String(value || "").trim();
+    if (!raw) return "";
+    var match = raw.match(/^(?:(https?):\/\/)?((?:\d{1,3}\.){3}\d{1,3})(?::(\d{1,5}))?$/i);
+    if (!match) return "";
+    var octets = match[2].split(".");
+    if (octets.some(function (octet) { return Number(octet) > 255; })) return "";
+    if (match[3] && (Number(match[3]) < 1 || Number(match[3]) > 65535)) return "";
+    var host = match[2] + (match[3] ? ":" + match[3] : "");
+    return (match[1] ? match[1].toLowerCase() : "http") + "://" + host + MOUNT_PATH;
   }
 
   function pingAt(base) {
@@ -273,26 +286,24 @@
       return Promise.resolve(null);
     }
     NET.probing = (function () {
-      // 候选顺序：同源（劫持在）→ 上次成功的直连 → 注入 IP → 固定热点网段
-      var list = [""];
+      // 候选顺序：手动首选 → 同源（劫持在）→ 上次成功的直连 → 注入 IP → 固定热点网段
+      var list = [];
+      var preferred = normalizePreferredBase(Store.get(PREFERRED_BASE_KEY, ""));
+      if (preferred) list.push(preferred);
+      list.push("");
       var saved = Store.get(BASE_KEY, "");
       if (saved && list.indexOf(saved) < 0) list.push(saved);
       lanCandidates().forEach(function (b) { if (list.indexOf(b) < 0) list.push(b); });
       try { nvLog("debug", "net", "开始探测电脑服务，候选 " + list.length + " 个：" +
         list.map(function (b) { return b || "(同源)"; }).join(", ")); } catch (_) { }
 
-      return new Promise(function (resolve) {
-        var left = list.length, done = false;
-        if (!left) { resolve(null); return; }
-        list.forEach(function (base) {
-          pingAt(base).then(function (res) {
-            if (done) return;
-            if (res) { done = true; resolve(res); return; }
-            left--;
-            if (!left) { done = true; resolve(null); }
-          });
+      var generation = NET.generation;
+      return list.reduce(function (chain, base) {
+        return chain.then(function (found) {
+          return found ? found : pingAt(base);
         });
-      }).then(function (res) {
+      }, Promise.resolve(null)).then(function (res) {
+        if (generation !== NET.generation) return null;
         NET.online = !!res;
         NET.probed = true;
         if (res) {
@@ -343,6 +354,8 @@
   }
 
   window.addEventListener("offline", function () {
+    NET.generation++;
+    NET.probing = null;
     NET.online = false;
     NET.probed = true;
     NET.base = "";
@@ -2591,7 +2604,7 @@
       clearPkgUrls(id);
     });
     // Keep app registry and package files. Reset only volatile/system config.
-    [UI_KEY, BASE_KEY, DEV_KEY, DEBUG_KEY, PIN_KEY,
+    [UI_KEY, BASE_KEY, PREFERRED_BASE_KEY, DEV_KEY, DEBUG_KEY, PIN_KEY,
       "nova2.lock", "nova2.net", "nova2.settings"].forEach(function (key) {
       try { Store.remove(key); } catch (e) { }
     });
@@ -2936,6 +2949,22 @@
         info: function () { return NET.info; },
         base: function () { return NET.base; },
         online: function () { return NET.online; },
+        preferred: function () { return Store.get(PREFERRED_BASE_KEY, ""); },
+        setPreferred: function (value) {
+          var normalized = normalizePreferredBase(value);
+          if (value && !normalized) return { ok: false, error: "请输入有效的后端 IP 或地址" };
+          if (normalized) Store.set(PREFERRED_BASE_KEY, String(value).trim());
+          else Store.remove(PREFERRED_BASE_KEY);
+          NET.generation++;
+          NET.probing = null;
+          NET.probed = false;
+          NET.online = false;
+          NET.base = "";
+          NET.info = null;
+          NET.nextProbeAt = 0;
+          netChanged();
+          return { ok: true, base: normalized };
+        },
         // 应用动态基址：换局域网/换设备后自动跟随电脑新 IP（详见 netFetch 注释）
         mountUrl: netUrl,        // 同步：mountUrl("novel/api/meta")
         resolveUrl: netResolve,  // 异步：确保探测完成后再拼地址（iframe.src 用）

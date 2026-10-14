@@ -86,6 +86,25 @@
     spNet.appendChild(btnReprobe);
     rowNetBtn.appendChild(spNet);
     cardNet.appendChild(rowNetBtn);
+    var rowPreferred = OS.h("div", "nv-set-row");
+    rowPreferred.appendChild(OS.h("span", "nv-set-k", "首选后端 IP"));
+    var preferredBox = OS.h("span", "nv-set-v");
+    var preferredInput = document.createElement("input");
+    preferredInput.type = "text";
+    preferredInput.placeholder = "例如 192.168.137.1";
+    preferredInput.value = OS.net.preferred ? OS.net.preferred() : "";
+    preferredInput.className = "nv-set-input";
+    var btnPreferredSave = OS.h("button", "nv-btn", "保存");
+    var btnPreferredClear = OS.h("button", "nv-btn", "清除");
+    preferredBox.appendChild(preferredInput);
+    preferredBox.appendChild(document.createTextNode(" "));
+    preferredBox.appendChild(btnPreferredSave);
+    preferredBox.appendChild(document.createTextNode(" "));
+    preferredBox.appendChild(btnPreferredClear);
+    rowPreferred.appendChild(preferredBox);
+    cardNet.appendChild(rowPreferred);
+    var preferredHint = OS.h("div", "nv-set-hint", "连接时优先尝试此地址；不可用时自动降级到同源、历史地址和局域网自动发现。输入 IP 或带端口的地址。 ");
+    cardNet.appendChild(preferredHint);
     page.appendChild(cardNet);
 
     function refreshNet() {
@@ -104,6 +123,17 @@
       vCh.textContent = "正在探测…";
       OS.net.probe(true).then(function () { refreshNet(); });
     });
+    function savePreferred() {
+      var result = OS.net.setPreferred(preferredInput.value);
+      if (!result || !result.ok) { OS.toast(result && result.error || "地址格式不正确"); return; }
+      preferredInput.value = OS.net.preferred ? OS.net.preferred() : "";
+      OS.toast(result.base ? "首选后端已保存，正在连接" : "已清除首选后端");
+      vCh.textContent = "正在探测…";
+      OS.net.probe(true).then(function () { refreshNet(); });
+    }
+    btnPreferredSave.addEventListener("click", savePreferred);
+    btnPreferredClear.addEventListener("click", function () { preferredInput.value = ""; savePreferred(); });
+    preferredInput.addEventListener("keydown", function (e) { if (e.key === "Enter") savePreferred(); });
     OS.on("net-change", refreshNet);
     refreshNet();
 
