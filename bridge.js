@@ -72,8 +72,21 @@
         var PARENT = "*";
 
         /* ---- 与父页面握手获取一次性令牌 ---- */
+        // 同时把 os.js 解析出的电脑服务基址（同源时为空串，IP 直连时为
+        // "http://192.168.x.x/__nova__/"）回传给父页面保存。息屏恢复时
+        // loader 必须用这个地址重建 iframe，否则会回到打不开的劫持域名。
+        // 未 boot 时 window.OS 还没有 net，此时不带 b，避免把父页面已保存的
+        // 直连地址清成同源；os.js 探测完成后会主动调用 nva-netbase 补发。
         function handshake() {
-            try { window.parent.postMessage({ t: "nva-handshake" }, "*"); } catch (e) { }
+            try {
+                var msg = { t: "nva-handshake" };
+                try {
+                    if (window.OS && window.OS.net && window.OS.net.base) {
+                        msg.b = String(window.OS.net.base() || "");
+                    }
+                } catch (e) { }
+                window.parent.postMessage(msg, "*");
+            } catch (e) { }
         }
         window.addEventListener("message", function (e) {
             var d = e.data;
@@ -82,6 +95,29 @@
             PARENT = e.origin || "*";
             try { window.__NVA_TOKEN__ = TOKEN; } catch (e) { }
         });
+        // os.js 每次探测成功/失败都会广播 net-change，这里转成基址同步消息。
+        // bridge 在 <head> 执行，此时 window.OS 还未定义，故等 os.js 加载完再绑定。
+        function bindNetBase() {
+            try {
+                if (!window.OS || !window.OS.on) return false;
+                window.OS.on("net-change", function () {
+                    try {
+                        window.parent.postMessage({
+                            t: "nva-netbase",
+                            b: String((window.OS.net && window.OS.net.base()) || "")
+                        }, "*");
+                    } catch (e) { }
+                });
+                return true;
+            } catch (e) { return false; }
+        }
+        if (!bindNetBase()) {
+            document.addEventListener("DOMContentLoaded", bindNetBase);
+            var bindTries = 0;
+            var bindTimer = setInterval(function () {
+                if (bindNetBase() || ++bindTries > 40) clearInterval(bindTimer);
+            }, 50);
+        }
         handshake();
         setTimeout(handshake, 400);
         setTimeout(handshake, 1200);
@@ -108,10 +144,16 @@
         /* ---- 后台静默预取（必须在本 iframe 同源分区执行：Chrome 双键缓存按
               (顶级站, 当前帧站) 分区，父页面预取对本 iframe 无效）---- */
         var PF_KEY = "__nova_pfv__";
+        // 在线开关（os.js 写入 iframe 同源 localStorage）：关闭时不做任何网络预取，
+        // 避免后端不存在时把请求打到真实平台域名。
+        function onlineAllowed() {
+            try { return localStorage.getItem("nova2.online") === "true"; } catch (e) { return false; }
+        }
         function bridgePrefetch() {
             try {
-                // Prefetch is optional; skip it when the WebView is offline.
-                if (navigator.onLine === false) return;
+                // Prefetch is optional; skip it when the WebView is offline or
+                // the user has turned the online switch off.
+                if (navigator.onLine === false || !onlineAllowed()) return;
                 fetch("__filelist__.json", { cache: "no-cache" })
                     .then(function (r) { return r.json(); })
                     .then(function (man) {

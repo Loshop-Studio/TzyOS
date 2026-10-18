@@ -25,6 +25,48 @@
   function build(root, OS) {
     var page = OS.h("div", "nv-set");
 
+    /* ---------- 在线开关（置顶） ---------- */
+    // 默认关闭，且每次启动 OS 自动关闭；关闭时不探测电脑服务、不向劫持域名
+    // 发任何请求（避免后端不存在时在服务端日志留下大量非法后缀 404/405）。
+    var cardOnline = OS.h("div", "nv-set-card");
+    cardOnline.appendChild(OS.h("h4", "", "在线"));
+    var rowOnline = OS.h("div", "nv-set-row");
+    rowOnline.appendChild(OS.h("span", "nv-set-k", "在线模式"));
+    var onlineBox = OS.h("span", "nv-set-v");
+    var cbOnline = document.createElement("input");
+    cbOnline.type = "checkbox";
+    cbOnline.className = "nv-checkbox";
+    var onlineState = OS.h("span", "", "");
+    onlineBox.appendChild(onlineState);
+    onlineBox.appendChild(document.createTextNode(" "));
+    onlineBox.appendChild(cbOnline);
+    rowOnline.appendChild(onlineBox);
+    cardOnline.appendChild(rowOnline);
+    var onlineHint = OS.h("div", "nv-set-hint",
+      "关闭时只使用离线空间，完全不连接电脑服务，也不会向网页域名发送任何请求。" +
+      "每次启动系统都会自动关闭，需要时请手动打开。");
+    cardOnline.appendChild(onlineHint);
+    page.appendChild(cardOnline);
+
+    function renderOnline() {
+      var on = OS.net.onlineEnabled ? OS.net.onlineEnabled() : false;
+      cbOnline.checked = on;
+      onlineState.textContent = on
+        ? (OS.net.online() ? "已开启 · 电脑服务已连接" : "已开启 · 正在探测电脑服务")
+        : "已关闭（离线）";
+    }
+    cbOnline.addEventListener("change", function () {
+      var on = !!cbOnline.checked;
+      if (OS.net.setOnline) OS.net.setOnline(on);
+      renderOnline();
+      OS.toast(on ? "已开启在线模式" : "已关闭在线模式");
+      if (on && OS.net.probe) {
+        OS.net.probe(true).then(function () { renderOnline(); });
+      }
+    });
+    OS.on("net-change", renderOnline);
+    renderOnline();
+
     /* ---------- 外观 ---------- */
     var cardLook = OS.h("div", "nv-set-card");
     cardLook.appendChild(OS.h("h4", "", "外观"));
@@ -110,6 +152,13 @@
     function refreshNet() {
       var info = OS.net.info();
       var base = OS.net.base();
+      // 在线开关关闭时不探测也不显示"离线（仅离线空间可用）"之外的状态，
+      // 否则用户会误以为在反复尝试连接。
+      if (OS.net.onlineEnabled && !OS.net.onlineEnabled()) {
+        vCh.textContent = "在线模式已关闭（设置页顶部开启）";
+        vWan.textContent = "—";
+        return;
+      }
       vCh.textContent = OS.net.online()
         ? (base === "" ? "同源（劫持通道）" : "热点直连 " + base.replace(/^https?:\/\//, "").split("/")[0])
         : "离线（仅离线空间可用）";
@@ -120,6 +169,10 @@
       }
     }
     btnReprobe.addEventListener("click", function () {
+      if (OS.net.onlineEnabled && !OS.net.onlineEnabled()) {
+        OS.toast("请先在顶部开启在线模式");
+        return;
+      }
       vCh.textContent = "正在探测…";
       OS.net.probe(true).then(function () { refreshNet(); });
     });

@@ -66,7 +66,8 @@ def _api_body():
 def _safe_fs_path(rel):
     """把相对路径解析到 fs_root 内，越界抛 ValueError（防目录穿越）。"""
     rel = str(rel or "").replace("\\", "/").strip().lstrip("/")
-    if str(cfg("fs_root", "") or "").strip() == "__ALL_DRIVES__":
+    # __ALL_DRIVES__ 仅 Windows 有意义；其它平台由 fs_root() 回退到主目录。
+    if os.name == "nt" and str(cfg("fs_root", "") or "").strip() == "__ALL_DRIVES__":
         if not rel:
             return None
         m = re.match(r"^([A-Za-z]):(?:/(.*))?$", rel)
@@ -115,7 +116,8 @@ def api_fs(op, method):
 
     try:
         if op == "list":
-            if str(cfg("fs_root", "") or "").strip() == "__ALL_DRIVES__" and not str(arg("path") or "").strip():
+            if (os.name == "nt" and str(cfg("fs_root", "") or "").strip() == "__ALL_DRIVES__"
+                    and not str(arg("path") or "").strip()):
                 entries = []
                 if os.name == "nt":
                     for code in range(ord("A"), ord("Z") + 1):
@@ -162,6 +164,8 @@ def api_fs(op, method):
             return _api_json({"ok": True, "size": len(raw)})
         if op == "del":
             fp = _safe_fs_path(arg("path"))
+            if not os.path.exists(fp):
+                return _api_json({"ok": False, "error": "文件或目录不存在"}, 404)
             if os.path.isdir(fp):
                 if os.listdir(fp):
                     return _api_json({"ok": False, "error": "目录非空"}, 400)
@@ -177,14 +181,26 @@ def api_fs(op, method):
             new_name = str(arg("newName", "")).strip().replace("/", "").replace("\\", "")
             if not new_name:
                 return _api_json({"ok": False, "error": "新名称不能为空"}, 400)
+            if not os.path.exists(fp):
+                return _api_json({"ok": False, "error": "源文件或目录不存在"}, 404)
             new_fp = os.path.join(os.path.dirname(fp), new_name)
-            os.rename(fp, new_fp)
+            if os.path.exists(new_fp):
+                return _api_json({"ok": False, "error": "目标名称已存在"}, 409)
+            try:
+                os.rename(fp, new_fp)
+            except OSError as e:
+                return _api_json({"ok": False, "error": "重命名失败：%s" % e.strerror}, 400)
             return _api_json({"ok": True})
         return _api_json({"ok": False, "error": "未知操作"}, 400)
     except ValueError as e:
         return _api_json({"ok": False, "error": str(e)}, 403)
+    except FileNotFoundError as e:
+        # 不把服务器绝对路径回传给前端
+        return _api_json({"ok": False, "error": "文件或目录不存在"}, 404)
+    except PermissionError:
+        return _api_json({"ok": False, "error": "没有权限访问该路径"}, 403)
     except Exception as e:
-        return _api_json({"ok": False, "error": str(e)}, 500)
+        return _api_json({"ok": False, "error": "操作失败：%s" % type(e).__name__}, 500)
 
 
 def _ftp_connect(b):
@@ -593,6 +609,9 @@ def serve_nova_api(rel, method):
     if kind == "music":
         from novacore import music_api
         return music_api.music_api(op)
+    if kind == "search":
+        from novacore import search_api
+        return search_api.search_api(op, method)
     if kind == "ping":
         return _api_json({"ok": True, "fs_root": fs_root(),
                           # Keep the liveness probe local and cheap.  WAN

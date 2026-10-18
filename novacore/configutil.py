@@ -56,6 +56,11 @@ def novaos_dir():
 def fs_root():
     """本地文件系统应用的根目录（防逃逸边界）。"""
     r = str(cfg("fs_root", "") or "").strip()
+    # __ALL_DRIVES__ 是 Windows 专用模式（列盘符 + 按盘符解析路径）。
+    # 在非 Windows 上它没有意义，会让 fs_root() 返回一个不存在的目录，
+    # 导致文件管理完全不可用；此时回退到用户主目录。
+    if r == "__ALL_DRIVES__" and os.name != "nt":
+        return os.path.abspath(os.path.expanduser("~"))
     if not r:
         r = os.path.expanduser("~")
     return os.path.abspath(r)

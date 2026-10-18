@@ -219,10 +219,32 @@
   })();
   var BASE_KEY = "nova2.apiBase";
   var PREFERRED_BASE_KEY = "nova2.preferredApiBase";
+  // 在线开关（默认关闭，且每次启动 OS 都强制关闭）：
+  // 关闭时完全不探测电脑服务、也不向劫持域名发任何请求，避免后端不存在时
+  // 反复请求非法后缀在服务端日志里留下 404/405 噪音、引起管理员误解。
+  // 用户在设置页手动打开后，本次运行内生效；下次启动自动关闭。
+  var ONLINE_KEY = "nova2.online";
   var NET = {
     base: "", info: null, online: false, probing: null, waiters: [],
     probed: false, nextProbeAt: 0, generation: 0
   };
+
+  function onlineEnabled() {
+    return Store.get(ONLINE_KEY, false) === true;
+  }
+  function setOnlineEnabled(on) {
+    Store.set(ONLINE_KEY, !!on);
+    // 切换后清空探测缓存，下一次调用按新状态重新判定
+    NET.generation++;
+    NET.probing = null;
+    NET.probed = false;
+    NET.online = false;
+    NET.base = "";
+    NET.info = null;
+    NET.nextProbeAt = 0;
+    netChanged();
+    if (on) netProbe(true);
+  }
 
   function lanCandidates() {
     var cfg = window.__NOVA_LAN__ || {};
@@ -273,6 +295,20 @@
   }
 
   function netProbe(force) {
+    // 在线开关关闭：不探测、不请求。直接返回 null，所有 netCall/netFetch
+    // 走各自的离线分支，界面显示离线空间可用。
+    if (!onlineEnabled()) {
+      NET.online = false;
+      NET.probed = true;
+      NET.base = "";
+      NET.info = null;
+      NET.probing = null;
+      NET.nextProbeAt = 0;
+      // 统一收尾：唤醒任何等待中的调用方，避免开关切换时挂起。
+      var ws0 = NET.waiters; NET.waiters = [];
+      ws0.forEach(function (fn) { try { fn(null); } catch (e) { } });
+      return Promise.resolve(null);
+    }
     if (NET.probing) return NET.probing;
     // An empty base is valid for a healthy same-origin mount, so cache the
     // complete probe result instead of using base as the cache sentinel.
@@ -364,6 +400,7 @@
     netChanged();
   });
   window.addEventListener("online", function () {
+    if (!onlineEnabled()) return;   // 在线开关关闭时不因网络恢复而探测
     NET.nextProbeAt = 0;
     netProbe(true);
   });
@@ -381,6 +418,7 @@
   }
 
   function netCall(rel, body, tries) {
+    if (!onlineEnabled()) return Promise.resolve(OFFLINE);
     if (NET.probed && !NET.online && NET.nextProbeAt && Date.now() < NET.nextProbeAt) {
       return Promise.resolve(OFFLINE);
     }
@@ -399,6 +437,7 @@
 
   // 走电脑网络代取外网（GET，返回原始 Blob）；断劫持直连 IP 时同样可用
   function netGetWeb(url) {
+    if (!onlineEnabled()) return Promise.resolve({ ok: false, offline: true, error: "在线功能已关闭" });
     function attempt(base, tries) {
       return fetch(base + "api/web?u=" + encodeURIComponent(url)).then(function (r) {
         if (r.status === 200) {
@@ -443,6 +482,9 @@
   }
   // 异步拼接：确保探测完成后再给地址（用于 iframe.src 等必须在挂载后写死的场景）
   function netResolve(rel) {
+    // 在线关闭时不返回同源相对地址，避免 iframe 指向劫持域名打空请求；
+    // 调用方据此回退到本地 lib/ 路径。
+    if (!onlineEnabled()) return Promise.resolve(null);
     var r = normRel(rel);
     if (NET.base) return Promise.resolve(NET.base + r);
     return netProbe(false).then(function (p) {
@@ -451,6 +493,7 @@
   }
   // 带自动重探重试的动态基址 fetch：返回原生 Response，可直接 .json()/.text()/.blob()
   function netFetch(rel, init) {
+    if (!onlineEnabled()) return Promise.reject(new Error("在线功能已关闭"));
     var r = normRel(rel);
     function attempt(base, tries) {
       return fetch(base + r, init).then(function (resp) {
@@ -501,6 +544,25 @@
       });
     },
     sysLog: function (logs) { return netCall("sys/log", { logs: logs }); },
+    // 对话式搜索：联网搜索 + 可选云端 AI 整理（电脑端 novacore/search_api.py）
+    search: function (query, options) {
+      return netCall("api/search", {
+        query: String(query || ""),
+        limit: (options && options.limit) || 8
+      });
+    },
+    searchStatus: function () { return netCall("api/search/status", {}); },
+    searchConfig: function (body) { return netCall("api/search/config", body || {}); },
+    // 内置应用静态站落库：让电脑把 novaos2/lib/<id>/ 复制到 apps_data/<id>/，
+    // 返回可直接加载的 HTTP 地址（电脑不可达时返回 null，调用方回退 lib/ 相对路径）。
+    libAppUrl: function (id, page) {
+      page = String(page || "index.html").replace(/^\/+/, "");
+      return netCall("sys/app-data-ensure", { id: id }).then(function (r) {
+        if (!r || !r.ok) return null;
+        return netResolve("apps-data/" + encodeURIComponent(id) + "/" +
+          page.split("/").map(encodeURIComponent).join("/"));
+      })["catch"](function () { return null; });
+    },
     restoreCatalog: function () { return netCall("sys/restore-catalog", {}); },
     restorePackage: function (name) {
       return netGetRaw("sys/restore-package?f=" + encodeURIComponent(name));
@@ -1114,6 +1176,7 @@
 
   // GET 挂载点原始资源（应用仓库 .tzyp 下载等），带一次故障转移，成功返回 Blob
   function netGetRaw(rel) {
+    if (!onlineEnabled()) return Promise.resolve({ ok: false, offline: true, error: "在线功能已关闭" });
     function attempt(base, tries) {
       return fetch(base + rel, { method: "GET" })
         .then(function (r) {
@@ -2087,22 +2150,54 @@
     });
   }
 
-  // 开机后异步加载全部已安装应用，单个失败不影响其他应用与系统
+  // 开机后异步加载全部已安装应用，单个失败不影响其他应用与系统。
+  // 注意：以前加载失败会把应用直接从注册表删除，缓存被部分清理或 IDB 瞬时
+  // 未就绪时，用户的已安装应用会永久消失。现在只记录失败，保留注册表并稍后
+  // 重试；只有用户主动卸载或确认包已损坏时才移除。
   function loadInstalledApps() {
     var list = appsRegGet();
     nvLog("info", "pkg", "加载已注册应用 " + list.length + " 个：" +
       list.map(function (m) { return m.id + "@" + m.version; }).join(", "));
+    var failed = [];
     var chain = Promise.resolve();
     list.forEach(function (meta) {
       chain = chain.then(function () {
         if (!meta || !meta.id || apps[meta.id]) return null;
         return loadInstalledApp(meta)["catch"](function (e) {
-          nvErr("pkg", e, "已安装应用 " + meta.id + " 加载失败，已移出注册表");
-          appsRegSet(appsRegGet().filter(function (m) { return m.id !== meta.id; }));
+          failed.push(meta.id);
+          nvErr("pkg", e, "已安装应用 " + meta.id + " 加载失败（保留注册表，稍后重试）");
         });
       });
     });
-    return chain;
+    return chain.then(function () {
+      if (failed.length) scheduleAppRetry(failed);
+      return failed;
+    });
+  }
+
+  // 加载失败的应用做有限次延迟重试：缓存/存储瞬时不可用时仍能自愈。
+  var appRetry = { round: 0, timer: 0, ids: {} };
+  function scheduleAppRetry(ids) {
+    ids.forEach(function (id) { appRetry.ids[id] = 1; });
+    if (appRetry.timer || appRetry.round >= 3) return;
+    appRetry.timer = setTimeout(function () {
+      appRetry.timer = 0;
+      appRetry.round++;
+      var pending = Object.keys(appRetry.ids);
+      appRetry.ids = {};
+      pending.forEach(function (id) {
+        var meta = appsRegGet().filter(function (m) { return m.id === id; })[0];
+        if (!meta || apps[id]) return;
+        loadInstalledApp(meta).then(function () {
+          nvLog("info", "pkg", "应用重试加载成功：" + id);
+          if (desktopReady) renderDesktop();
+        }, function () { appRetry.ids[id] = 1; });
+      });
+      if (Object.keys(appRetry.ids).length) {
+        appRetry.timer = 0;
+        scheduleAppRetry(Object.keys(appRetry.ids));
+      }
+    }, 1500 * (appRetry.round + 1));
   }
 
   // 预装：仓库里标记 preinstall 的应用包，开机时静默安装/升级。
@@ -2232,7 +2327,23 @@
           });
         }).then(writeOne);
       }
-      return writeOne().then(function () { return ctx; });
+      return writeOne().then(function () {
+        // 同步落盘到电脑 apps_data/<id>/（离线或失败时忽略，assetUrl 会回退 blob）。
+        return syncAppToDisk(meta.id, entries)["catch"](function (e) {
+          var synced = Store.get("nova2.appdata", {}) || {};
+          var had = !!synced[meta.id];
+          delete synced[meta.id];
+          Store.set("nova2.appdata", synced);
+          // 失败时磁盘可能留下半套（begin 已清空并新建目录），删掉避免
+          // 与注册表/离线空间不一致；删除失败不影响安装结果。
+          if (had) {
+            try { netCall("sys/app-data-remove", { id: meta.id }); } catch (_) { }
+          }
+          try { nvLog("warn", "pkg", "应用落盘失败，回退离线空间：" + meta.id + " | " +
+            (e && e.message)); } catch (_) { }
+          return null;
+        }).then(function () { return ctx; });
+      });
     }).then(function (ctx) {
       pg("register", 1, 1);
       var now = Date.now();
@@ -2292,6 +2403,16 @@
       if (pd2.length !== pd.length) Store.set("nova2.preinstall.done", pd2);
     }
     return vfs.del(APPS_ROOT + "/" + id)["catch"](function () { return null; })
+      .then(function () {
+        var synced = Store.get("nova2.appdata", {}) || {};
+        if (synced[id]) {
+          delete synced[id];
+          Store.set("nova2.appdata", synced);
+          // 同步删除电脑磁盘目录，避免卸载后残留可访问的页面/脚本。
+          return netCall("sys/app-data-remove", { id: id })["catch"](function () { return null; });
+        }
+        return null;
+      })
       .then(function () { if (desktopReady) renderDesktop(); return { ok: true }; });
   }
 
@@ -2310,6 +2431,24 @@
     rel = String(rel || "").replace(/^\/+/, "");
     var key = id + "/" + rel;
     if (pkgUrlCache[key]) return Promise.resolve(pkgUrlCache[key]);
+    // 优先用电脑磁盘 apps_data/<id>/<rel> 的真实文件地址：安装时已同步落盘，
+    // HTML 可被 iframe 直接加载、js/css 可走 HTTP 缓存，且刷新后网址不变。
+    // 电脑不可达（离线）时才回退到 IndexedDB + blob URL。
+    var synced = Store.get("nova2.appdata", {}) || {};
+    if (synced[id]) {
+      return netResolve("apps-data/" + encodeURIComponent(id) + "/" +
+        rel.split("/").map(encodeURIComponent).join("/")).then(function (url) {
+        // netResolve 在在线开关关闭或探测失败时返回 null：此时必须回退
+        // 到离线空间 blob，不能把 null 缓存为资源地址（会导致离线应用白屏）。
+        if (!url) return appAssetUrlFromVfs(id, rel, key);
+        pkgUrlCache[key] = url;
+        return url;
+      }, function () { return appAssetUrlFromVfs(id, rel, key); });
+    }
+    return appAssetUrlFromVfs(id, rel, key);
+  }
+
+  function appAssetUrlFromVfs(id, rel, key) {
     return vfs.get(APPS_ROOT + "/" + id + "/" + rel).then(function (g) {
       if (!g || !g.ok) throw new Error((g && g.error) || "资源不存在");
       var blob = (g.text !== undefined && g.text !== null)
@@ -2318,6 +2457,38 @@
       var u = URL.createObjectURL(blob);
       pkgUrlCache[key] = u;
       return u;
+    });
+  }
+
+  // 把已解包的应用文件逐个同步到电脑磁盘（apps_data/<id>/）。
+  // 失败时静默降级为 blob URL，不影响应用安装成功。
+  function syncAppToDisk(id, entries) {
+    return netCall("sys/app-data-begin", { id: id }).then(function (r) {
+      if (!r || !r.ok) throw new Error((r && r.error) || "电脑端拒绝创建应用目录");
+      var i = 0;
+      function next() {
+        if (i >= entries.length) return null;
+        var en = entries[i++];
+        return en.zf.async("uint8array").then(function (bytes) {
+          var rel = "sys/app-data-put?id=" + encodeURIComponent(id) +
+            "&p=" + encodeURIComponent(en.rel);
+          return netFetch(rel, {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: bytes
+          }).then(function (resp) {
+            if (!resp || !resp.ok) throw new Error("写入失败：" + en.rel + "（HTTP " +
+              (resp ? resp.status : "?") + "）");
+            return next();
+          });
+        });
+      }
+      return Promise.resolve().then(next).then(function () {
+        var synced = Store.get("nova2.appdata", {}) || {};
+        synced[id] = 1;
+        Store.set("nova2.appdata", synced);
+        return { ok: true };
+      });
     });
   }
 
@@ -2378,6 +2549,100 @@
     var ww = Math.min(w - 24, w < 700 ? w - 16 : 820);
     var wh = Math.min(hh - 96, w < 700 ? hh - 120 : 580);
     return { w: ww, h: wh };
+  }
+
+  /* ---------------- 窗口降级容器 ----------------
+   * 缓存部分被清理导致 lib/winbox.bundle.min.js 缺失时，系统仍必须能启动
+   * 并使用离线空间/内置应用。MiniWin 提供 WinBox 的最小同形接口
+   * （mount/min/close/focus/minimize/restore/maximize），保证 openApp、
+   * 任务视图与 Dock 的调用不抛错。 */
+  function MiniWin(opts) {
+    opts = opts || {};
+    var self = this;
+    this.min = false;
+    this._closed = false;
+    var box = document.createElement("div");
+    box.className = "nv-miniwin";
+    box.style.cssText = "position:fixed;left:8px;right:8px;top:52px;bottom:8px;" +
+      "display:flex;flex-direction:column;background:#1a1d24;border-radius:10px;" +
+      "box-shadow:0 12px 40px rgba(0,0,0,.45);z-index:9000;overflow:hidden;";
+    var bar = document.createElement("div");
+    bar.style.cssText = "flex:0 0 auto;display:flex;align-items:center;gap:8px;" +
+      "padding:8px 10px;background:#23262e;color:#f2eee5;font-size:13px;";
+    var titleEl = document.createElement("div");
+    titleEl.textContent = opts.title || "";
+    titleEl.style.cssText = "flex:1;min-width:0;overflow:hidden;" +
+      "text-overflow:ellipsis;white-space:nowrap;";
+    var btnMin = document.createElement("button");
+    btnMin.textContent = "—";
+    var btnClose = document.createElement("button");
+    btnClose.textContent = "✕";
+    [btnMin, btnClose].forEach(function (b) {
+      b.style.cssText = "background:transparent;border:0;color:#f2eee5;font-size:15px;" +
+        "padding:2px 8px;cursor:pointer;";
+    });
+    var body = document.createElement("div");
+    body.style.cssText = "flex:1;min-height:0;position:relative;overflow:hidden;";
+    if (opts.mount) body.appendChild(opts.mount);
+    bar.appendChild(titleEl); bar.appendChild(btnMin); bar.appendChild(btnClose);
+    box.appendChild(bar); box.appendChild(body);
+    document.body.appendChild(box);
+    this._box = box;
+    this._body = body;
+    this._body.style.display = "block";
+
+    btnMin.addEventListener("click", function () { self.minimize(); });
+    btnClose.addEventListener("click", function () { self.close(); });
+    box.addEventListener("mousedown", function () { self.focus(); });
+    box.addEventListener("touchstart", function () { self.focus(); }, { passive: true });
+  }
+  MiniWin.prototype.focus = function () {
+    if (this._closed) return this;
+    try { this._box.style.zIndex = String(9000 + (++MiniWin._z || 1)); } catch (e) { }
+    if (this.min) this.restore();
+    if (this._onfocus) { try { this._onfocus(); } catch (e) { } }
+    return this;
+  };
+  MiniWin.prototype.minimize = function () {
+    if (this._closed) return this;
+    this.min = true;
+    this._box.style.display = "none";
+    if (this._onminimize) { try { this._onminimize(); } catch (e) { } }
+    return this;
+  };
+  MiniWin.prototype.restore = function () {
+    if (this._closed) return this;
+    this.min = false;
+    this._box.style.display = "flex";
+    return this;
+  };
+  MiniWin.prototype.maximize = function () {
+    if (this._closed) return this;
+    this._box.style.left = "0"; this._box.style.top = "0";
+    this._box.style.right = "0"; this._box.style.bottom = "0";
+    return this;
+  };
+  MiniWin.prototype.close = function () {
+    if (this._closed) return;
+    this._closed = true;
+    this._box.style.display = "none";
+    // WinBox close 会把 mount 节点退回原父节点；这里做等价处理，保证重开应用时不丢状态。
+    if (this._mount && this._body && this._mount.parentNode === this._body) {
+      try { this._body.removeChild(this._mount); } catch (e) { }
+    }
+    if (this._onclose) { try { this._onclose(); } catch (e) { } }
+    try { if (this._box.parentNode) this._box.parentNode.removeChild(this._box); } catch (e) { }
+  };
+
+  // 创建窗口：优先 WinBox，缺失时降级 MiniWin
+  function makeWin(opts) {
+    if (window.WinBox) return new WinBox(opts);
+    var w = new MiniWin(opts);
+    w._mount = opts.mount;
+    w._onclose = opts.onclose;
+    w._onfocus = opts.onfocus;
+    w._onminimize = opts.onminimize;
+    return w;
   }
 
   function focusApp(id) {
@@ -2452,7 +2717,7 @@
 
     var sz = winSize();
     var n = runningCount();
-    var wb = new WinBox({
+    var wb = makeWin({
       title: rec.def.name,
       mount: rec.root,
       width: sz.w,
@@ -2921,14 +3186,17 @@
   var booting = false;
   function boot() {
     if (booting || (window.OS && window.OS.__booted)) return;
+    // 注意：不再因为 WinBox 缺失而拒绝启动。缓存被部分清理时
+    // lib/winbox.bundle.min.js 可能 404，但离线空间、设置、文件管理等
+    // 仍必须可用；此时 makeWin() 会降级到内置 MiniWin。
     if (!window.WinBox) {
-      var w = document.createElement("div");
-      w.style.cssText = "position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;z-index:999";
-      w.textContent = "窗口组件加载失败，请检查网络后刷新";
-      document.body.appendChild(w);
-      return;
+      try { console.warn("[os] WinBox 未加载，窗口降级为内置容器"); } catch (e) { }
     }
     booting = true;
+
+    // 每次启动 OS 都强制关闭在线开关：即使上次手动打开过，重启后也回到离线，
+    // 必须由用户到设置页重新手动开启。避免后端不存在时长期后台探测。
+    try { Store.set(ONLINE_KEY, false); } catch (e) { }
 
     iconsEl = document.getElementById("nv-icons");
     dockEl = document.getElementById("nv-dock");
@@ -2949,6 +3217,9 @@
         info: function () { return NET.info; },
         base: function () { return NET.base; },
         online: function () { return NET.online; },
+        // 在线开关：关闭时不探测电脑服务、不向劫持域名发任何请求。
+        onlineEnabled: onlineEnabled,
+        setOnline: function (on) { setOnlineEnabled(!!on); return onlineEnabled(); },
         preferred: function () { return Store.get(PREFERRED_BASE_KEY, ""); },
         setPreferred: function (value) {
           var normalized = normalizePreferredBase(value);

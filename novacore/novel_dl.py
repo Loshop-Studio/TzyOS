@@ -55,12 +55,15 @@ def python_exe():
     env = (os.environ.get("NOVEL_PYTHON") or "").strip()
     if env and os.path.isfile(env):
         return env
-    bundled = os.path.join(HERE, "runtime", "python", "python.exe")
-    if os.path.isfile(bundled):
-        return bundled
+    # 内嵌运行时是 Windows 的 python.exe：在 Linux/macOS 上直接执行会
+    # 报 Exec format error，必须按平台跳过。
+    if os.name == "nt":
+        bundled = os.path.join(HERE, "runtime", "python", "python.exe")
+        if os.path.isfile(bundled):
+            return bundled
     if not getattr(sys, "frozen", False) and sys.executable:
         return sys.executable
-    for name in ("python", "python3"):
+    for name in ("python3", "python"):
         found = shutil.which(name)
         if found:
             return found

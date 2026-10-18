@@ -59,5 +59,12 @@
   "trigger_search_enable": true,
   "trigger_search_keyword": "cpt1104122",
   "exit_action": "hide",
-  "lan_mode": true
+  "lan_mode": true,
+  "search_ai_enable": false,
+  "search_ai_url": "",
+  "search_ai_key": "",
+  "search_ai_model": "",
+  "search_ai_max_tokens": 400,
+  "search_ai_daily_calls": 50,
+  "search_answer_chars": 800
 }

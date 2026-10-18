@@ -4,6 +4,7 @@
 WebRTC carries normal chat traffic when possible.  This module only handles
 registration, pairing, signaling and the fallback message relay.
 """
+import json
 import random
 import os
 import secrets
@@ -20,6 +21,12 @@ MAX_EVENTS = 200
 MAX_FILE_SIZE = 100 * 1024 * 1024
 FILE_TTL = 30 * 60
 TRANSFER_DIR = os.path.join(tempfile.gettempdir(), "novaos-lan-chat")
+# 昵称认领用的身份快照目录：与临时文件中继不同，这里必须跨重启保留，
+# 否则平板换系统后无法用昵称找回联系人与聊天记录。
+IDENTITY_DIR = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "backups", "lan-identities")
+MAX_IDENTITY_BYTES = 8 * 1024 * 1024
+
 
 
 class LanChatState(object):
@@ -27,12 +34,19 @@ class LanChatState(object):
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.devices = {}
+        # 昵称 -> 最近一次注册的 deviceId。平板换系统/清缓存后 deviceId 会变，
+        # 但昵称不变，据此把新设备接到同名身份上并更新在线地址。
+        self.names = {}
         self.pair_codes = {}
         self.events = {}
         self.files = {}
 
     def _now(self):
         return time.time()
+
+    def _normalize_name(self, name):
+        name = " ".join(str(name or "").split())
+        return name[:40]
 
     def _code(self):
         for _ in range(20):
@@ -58,11 +72,32 @@ class LanChatState(object):
         device_id = str(payload.get("deviceId") or "").strip()
         if not device_id or len(device_id) > 128:
             return {"ok": False, "error": "deviceId 无效"}, 400
-        name = str(payload.get("name") or "设备")[:80]
+        name = self._normalize_name(payload.get("name"))
+        if not name:
+            return {"ok": False, "error": "昵称不能为空"}, 400
         fingerprint = str(payload.get("fingerprint") or "")[:128]
+        # reclaim=True 表示调用方已确认要用此昵称接手旧身份（换系统找回）。
+        reclaim = bool(payload.get("reclaim"))
         with self.condition:
             self._cleanup()
+            known = self.names.get(name)
             previous = self.devices.get(device_id)
+            # 昵称已被另一个仍在线/曾注册的设备占用：默认不抢占，交由前端询问
+            # 用户是否需要“用此昵称找回”。confirm 后才允许改写映射。
+            if known and known != device_id:
+                other = self.devices.get(known)
+                if other and not reclaim:
+                    return {
+                        "ok": False,
+                        "code": "name-taken",
+                        "error": "昵称已被其他设备使用",
+                        "peer": {"deviceId": known, "name": other.get("name"),
+                                 "fingerprint": other.get("fingerprint"),
+                                 "lastSeen": int(other.get("lastSeen", 0) * 1000)},
+                    }, 409
+                self.devices.pop(known, None)
+                self.events.pop(known, None)
+            self.names[name] = device_id
             self.devices[device_id] = {
                 "deviceId": device_id, "name": name,
                 "fingerprint": fingerprint, "lastSeen": self._now(),
@@ -73,11 +108,13 @@ class LanChatState(object):
                 for peer_id in self.devices:
                     if peer_id != device_id:
                         self._push(peer_id, "device-update", {
-                            "deviceId": device_id, "name": name,
-                            "fingerprint": fingerprint,
+                            "deviceId": device_id,
+                            "name": name, "fingerprint": fingerprint,
+                            "previousName": previous.get("name"),
                         })
                 self.condition.notify_all()
-            return {"ok": True, "device": self.devices[device_id]}, 200
+            return {"ok": True, "device": self.devices[device_id],
+                    "reclaimed": bool(known and known != device_id)}, 200
 
     def group_message(self, source_id, message):
         with self.condition:
@@ -134,7 +171,11 @@ class LanChatState(object):
             self._cleanup()
             if not self._known(source_id, target_id):
                 return {"ok": False, "error": "设备未注册或已离线"}, 404
-            self._push(target_id, "message", {"from": source_id, "message": message})
+            self._push(target_id, "message", {
+                "from": source_id,
+                "name": (self.devices.get(source_id) or {}).get("name", ""),
+                "message": message,
+            })
             self.condition.notify_all()
             return {"ok": True}, 200
 
@@ -184,6 +225,53 @@ class LanChatState(object):
             if not item or item["to"] != device_id:
                 return None
             return dict(item)
+
+    # ---------------- 昵称身份快照（换系统找回） ----------------
+    def _identity_path(self, name):
+        safe = "".join(ch for ch in self._normalize_name(name)
+                       if ch not in '\\/:*?"<>|').strip()
+        if not safe:
+            return None
+        import hashlib
+        digest = hashlib.sha1(safe.encode("utf-8")).hexdigest()[:16]
+        return os.path.join(IDENTITY_DIR, digest + ".json")
+
+    def save_identity(self, payload):
+        name = self._normalize_name(payload.get("name"))
+        if not name:
+            return {"ok": False, "error": "昵称不能为空"}, 400
+        try:
+            raw = json.dumps(payload.get("snapshot") or {}, ensure_ascii=False)
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": "身份数据无效：%s" % exc}, 400
+        if len(raw.encode("utf-8")) > MAX_IDENTITY_BYTES:
+            return {"ok": False, "error": "身份数据过大"}, 413
+        path = self._identity_path(name)
+        if not path:
+            return {"ok": False, "error": "昵称无效"}, 400
+        os.makedirs(IDENTITY_DIR, exist_ok=True)
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(raw)
+            os.replace(tmp, path)
+        except OSError as exc:
+            return {"ok": False, "error": "身份保存失败：%s" % exc}, 500
+        return {"ok": True, "name": name, "size": len(raw)}, 200
+
+    def load_identity(self, name):
+        name = self._normalize_name(name)
+        if not name:
+            return {"ok": False, "error": "昵称不能为空"}, 400
+        path = self._identity_path(name)
+        if not path or not os.path.isfile(path):
+            return {"ok": False, "code": "not-found", "error": "电脑上没有该昵称的记录"}, 404
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                snapshot = json.load(f)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": "身份读取失败：%s" % exc}, 500
+        return {"ok": True, "name": name, "snapshot": snapshot}, 200
 
     def finish_file(self, file_id, device_id):
         with self.condition:
@@ -291,4 +379,10 @@ def handle_lan_request(subpath, request):
             subpath[len("file/finish/"):], str(body.get("deviceId") or "").strip()))
     if subpath == "poll" and request.method == "GET":
         return json_result(*STATE.poll(request.args.get("deviceId", "").strip(), request.args.get("timeout", "20")))
+    if subpath == "identity/save" and request.method == "POST":
+        return json_result(*STATE.save_identity(request.get_json(silent=True) or {}))
+    if subpath == "identity/load" and request.method in ("GET", "POST"):
+        body = request.get_json(silent=True) or {}
+        name = body.get("name") if isinstance(body, dict) and body.get("name") else request.args.get("name", "")
+        return json_result(*STATE.load_identity(name))
     return json_result({"ok": False, "error": "LAN Chat 接口不存在"}, 404)

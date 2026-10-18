@@ -3,6 +3,7 @@
 import io
 import os
 import re
+import shutil
 import time
 import zipfile
 
@@ -24,6 +25,9 @@ def bump_entry_versions():
     # libraries permanently pinned in the tablet's one-year HTTP cache.
     pat = re.compile(r'((?:src|href)=")((?!https?:|data:|blob:|#|//)[^"?#]+)(?:\?[^"#]*)?(#[^"]*)?(")', re.I)
     skip_dirs = {"dist", "archive", "logs", "node_modules", "__pycache__", ".git"}
+    # 第三方静态站（Vite 构建产物、文件名自带 hash）：不参与 ?v= 刷新，
+    # 否则每次更新都会改写上游文件，产生无意义 diff 且会污染落库副本。
+    skip_rel_prefixes = ("lib/phigros/",)
 
     def bump_html(html_path):
         with open(html_path, "r", encoding="utf-8") as f:
@@ -51,14 +55,20 @@ def bump_entry_versions():
                 f.write(new_html)
 
     try:
+        root_norm = os.path.abspath(root)
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in skip_dirs]
             for name in filenames:
-                if name.endswith(".html"):
-                    try:
-                        bump_html(os.path.join(dirpath, name))
-                    except Exception as e:
-                        errors.append("%s: %s" % (name, e))
+                if not name.endswith(".html"):
+                    continue
+                fp_html = os.path.join(dirpath, name)
+                rel_html = os.path.relpath(fp_html, root_norm).replace(os.sep, "/")
+                if any(rel_html.startswith(p) for p in skip_rel_prefixes):
+                    continue
+                try:
+                    bump_html(fp_html)
+                except Exception as e:
+                    errors.append("%s: %s" % (name, e))
     except Exception as e:
         errors.append(str(e))
     return changed, errors
@@ -301,6 +311,173 @@ def append_tablet_log(remote, lines, ua=""):
 APP_REPO_DIR = os.path.join(HERE, "apps_repo")
 APP_PKG_MAX = 64 * 1024 * 1024
 _APP_ID_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+# 应用安装时把包内文件原样解到电脑磁盘，平板通过 HTTP 直接加载这些真实文件，
+# 不再每次运行时从 IndexedDB 读出字节再生成 blob URL（无法被 iframe 直接复用、
+# 也不参与 HTTP 缓存）。目录结构与包内一致。
+APP_DATA_DIR = os.path.join(HERE, "apps_data")
+
+
+def app_data_root(app_id):
+    """返回应用磁盘目录（已做 id 校验）；非法返回 None。"""
+    app_id = str(app_id or "").strip()
+    if not _APP_ID_RE.match(app_id):
+        return None
+    root = os.path.abspath(os.path.join(APP_DATA_DIR, app_id))
+    base = os.path.abspath(APP_DATA_DIR)
+    try:
+        if os.path.commonpath([root, base]) != base:
+            return None
+    except ValueError:
+        return None
+    return root
+
+
+def app_data_begin(app_id):
+    """清空并重建某应用的磁盘目录（安装/更新前调用）。"""
+    root = app_data_root(app_id)
+    if not root:
+        return {"ok": False, "error": "应用 id 非法"}, 400
+    try:
+        if os.path.isdir(root):
+            shutil.rmtree(root, ignore_errors=True)
+        os.makedirs(root, exist_ok=True)
+    except OSError as exc:
+        return {"ok": False, "error": "创建应用目录失败：%s" % exc}, 500
+    return {"ok": True, "id": app_id}, 200
+
+
+def app_data_put(app_id, rel, stream):
+    """写入应用目录下的单个文件；rel 必须是应用内的安全相对路径。"""
+    root = app_data_root(app_id)
+    if not root:
+        return {"ok": False, "error": "应用 id 非法"}, 400
+    rel = str(rel or "").replace("\\", "/").strip().lstrip("/")
+    if not rel or rel.endswith("/"):
+        return {"ok": False, "error": "路径非法"}, 400
+    parts = [p for p in rel.split("/") if p]
+    if any(p in ("", ".", "..") or ":" in p for p in parts):
+        return {"ok": False, "error": "路径非法"}, 400
+    dest = os.path.abspath(os.path.join(root, *parts))
+    try:
+        if os.path.commonpath([dest, root]) != root:
+            return {"ok": False, "error": "路径越界"}, 403
+    except ValueError:
+        return {"ok": False, "error": "路径越界"}, 403
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    size = 0
+    tmp = dest + ".part"
+    try:
+        with open(tmp, "wb") as f:
+            while True:
+                chunk = stream.read(64 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > APP_PKG_MAX:
+                    raise ValueError("文件过大")
+                f.write(chunk)
+        os.replace(tmp, dest)
+    except ValueError as exc:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return {"ok": False, "error": str(exc)}, 413
+    except OSError as exc:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return {"ok": False, "error": "写入失败：%s" % exc}, 500
+    return {"ok": True, "path": rel, "size": size}, 200
+
+
+def app_data_file(app_id, rel):
+    """定位应用目录内的文件；越界或不存在返回 None。"""
+    root = app_data_root(app_id)
+    if not root:
+        return None
+    rel = str(rel or "").replace("\\", "/").strip().lstrip("/")
+    if not rel:
+        return None
+    dest = os.path.abspath(os.path.join(root, rel.replace("/", os.sep)))
+    try:
+        if os.path.commonpath([dest, root]) != root:
+            return None
+    except ValueError:
+        return None
+    return dest if os.path.isfile(dest) else None
+
+
+def app_data_remove(app_id):
+    root = app_data_root(app_id)
+    if root and os.path.isdir(root):
+        shutil.rmtree(root, ignore_errors=True)
+    return {"ok": True}, 200
+
+
+# 内置应用的静态站来源目录（novaos2/lib/<id>/）。首次需要落库时整体复制到
+# apps_data/<id>/，之后 iframe 直接加载磁盘上的真实 HTML（不再依赖 VFS/blob）。
+LIB_APP_IDS = ("mojuan", "quickdraw", "phigros")
+
+
+def _lib_dir(app_id):
+    from novacore.configutil import novaos_dir
+    if app_id not in LIB_APP_IDS:
+        return None
+    path = os.path.join(novaos_dir(), "lib", app_id)
+    return path if os.path.isdir(path) else None
+
+
+def _lib_stamp(app_id):
+    """用目录内最新 mtime 作为版本戳：来源更新后会重新落库。"""
+    src = _lib_dir(app_id)
+    if not src:
+        return 0
+    latest = 0
+    for dirpath, _dirs, files in os.walk(src):
+        for name in files:
+            try:
+                latest = max(latest, int(os.path.getmtime(os.path.join(dirpath, name))))
+            except OSError:
+                pass
+    return latest
+
+
+def app_data_ensure(app_id):
+    """确保内置应用的静态站已落库到 apps_data/<id>/。
+
+    返回 {ok, id, path, stamp, copied}；不动则 copied=False。
+    使用 <root>/.nova_stamp 记录来源 mtime，避免每次启动重复复制。
+    """
+    if app_id not in LIB_APP_IDS:
+        return {"ok": False, "error": "不是内置落库应用"}, 400
+    src = _lib_dir(app_id)
+    if not src:
+        return {"ok": False, "error": "来源目录不存在"}, 404
+    dest = app_data_root(app_id)
+    if not dest:
+        return {"ok": False, "error": "应用目录不可用"}, 500
+    stamp = _lib_stamp(app_id)
+    stamp_file = os.path.join(dest, ".nova_stamp")
+    try:
+        if os.path.isfile(stamp_file):
+            with open(stamp_file, "r", encoding="utf-8") as f:
+                if f.read().strip() == str(stamp):
+                    return {"ok": True, "id": app_id, "stamp": stamp,
+                            "copied": False}, 200
+    except OSError:
+        pass
+    try:
+        if os.path.isdir(dest):
+            shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(src, dest)
+        with open(stamp_file, "w", encoding="utf-8") as f:
+            f.write(str(stamp))
+    except OSError as exc:
+        return {"ok": False, "error": "落库失败：%s" % exc}, 500
+    return {"ok": True, "id": app_id, "stamp": stamp, "copied": True}, 200
 
 
 def _ver_key(v):

@@ -35,6 +35,8 @@
     var watchdog = 0;
     var lastToggleAt = 0;    // 防止一次口令触发两次开关（闪一下）
     var activationPending = false;
+    var pageHiddenAt = 0;
+    var RESUME_RECOVERY_MS = 60000;
 
     // 激活状态保存在宿主页面的 localStorage 中，并按服务地址隔离，避免
     // 同一浏览器里的不同部署互相继承激活状态。localStorage 不可用时按
@@ -98,7 +100,25 @@
     /* ---------------- 开关 ---------------- */
     // 入口改用 nova.html：旧 index.html/os.html 已被投毒一年不回源，
     // 框架升级再次换名，零清缓存即可让设备拿到新版（loader 本身 no-cache）。
-    var FRAME_SRC = serveOrigin() + mountPath() + "nova.html";
+    // 地址不能写死成劫持域名：断劫持后 os.js 会改用 IP 直连，此时域名打不开，
+    // 息屏恢复重建 iframe 若回到域名就会黑屏。bridge 在握手里回传 os.js 实际
+    // 使用的基址，父页面存进 localStorage（iframe 与宿主不同源，不能直接共享）。
+    var BASE_KEY = "nova2.frameBase";
+    function storedBase() {
+        try { return String(localStorage.getItem(BASE_KEY) || ""); } catch (e) { return ""; }
+    }
+    function saveBase(base) {
+        try {
+            if (base) localStorage.setItem(BASE_KEY, base);
+            else localStorage.removeItem(BASE_KEY);
+        } catch (e) { }
+    }
+    function frameSrc() {
+        var b = storedBase();
+        // 仅接受本服务的绝对地址（http(s)://host 开头），其余一律用同源
+        if (b && !(b.indexOf("http://") === 0 || b.indexOf("https://") === 0)) b = "";
+        return (b || (serveOrigin() + mountPath())) + "nova.html";
+    }
 
     // 挂载结构：body > host(div)  ──[closed ShadowRoot]── > iframe
     // 关键点：
@@ -126,13 +146,48 @@
         frame = null;
         host = null;
         root = null;
-        createFrame(FRAME_SRC + bust);
+        createFrame(frameSrc() + bust);
+        // hide() 会把 pointerEvents 置 none；WebView 息屏恢复后若残留在 none，
+        // 表现为“看得见但点不动”。这里显式复位全部显隐相关的内联样式。
         ensureHost().style.display = "block";
         ensureHost().style.visibility = "visible";
         ensureHost().style.opacity = "1";
+        ensureHost().style.pointerEvents = "auto";
         armWatchdog();
         poke("recovery");
     }
+
+    // Mobile/WebView processes may suspend a visible iframe while its host page
+    // is backgrounded. Recreate it on a long resume instead of trusting the old
+    // handshake forever; OS data is stored separately from this iframe runtime.
+    document.addEventListener("visibilitychange", function () {
+        if (document.hidden) {
+            pageHiddenAt = Date.now();
+            return;
+        }
+        var away = pageHiddenAt ? Date.now() - pageHiddenAt : 0;
+        pageHiddenAt = 0;
+        if (shown && away >= RESUME_RECOVERY_MS) {
+            recoverOS();
+            return;
+        }
+        // 短时间息屏：WebView 没冻结 iframe，只是丢了焦点/渲染。此时要确保
+        // 遮罩层可点，并让 iframe 内重新握手（内核丢弃旧 postMessage 监听时，
+        // loader 会一直以为 handshaked 而不再兜底重建）。
+        if (shown) {
+            ensureHost().style.pointerEvents = "auto";
+            poke("resume");
+            armWatchdog();
+        }
+    });
+
+    // WebView 从 bfcache 直接恢复页面时也会走这里（不触发 visibilitychange）
+    window.addEventListener("pageshow", function (e) {
+        if (e && e.persisted && shown) {
+            poke("bfcache");
+            recoverOS();
+        }
+    });
 
     function ensureHost() {
         if (host && host.parentNode) return host;
@@ -167,7 +222,7 @@
         frame.addEventListener("load", function () { dbg("frame load"); });
         frame.addEventListener("error", function () { dbg("frame error"); });
         root.appendChild(frame);
-        frame.src = src || FRAME_SRC;   // 先挂载再设 src；干净 URL 保证缓存键一致
+        frame.src = src || frameSrc();   // 先挂载再设 src；干净 URL 保证缓存键一致
         dbg("frame created");
         poke("mk");
     }
@@ -207,32 +262,23 @@
     function armWatchdog() {
         if (watchdog) clearTimeout(watchdog);
         watchdog = setTimeout(function () {
+            watchdog = 0;
             if (!shown || handshaked || reloads >= 3) return;
-            // Do not replace the iframe with cache-busting URLs while the
-            // WebView is explicitly offline; keep the current state stable.
-            if (navigator.onLine === false) {
-                poke("offline");
-                return;
-            }
-            reloads = 3;
+            // 不再因 navigator.onLine === false 直接放弃：WebView 息屏恢复后
+            // 常常先报告离线，而本地服务（IP 直连）其实是通的。此前在这里
+            // return 会让黑屏 iframe 永远停在自定义域名上且吞掉所有触摸。
+            // 现在仍然重建，但地址取自 frameSrc()（优先 os.js 回传的直连基址）。
+            reloads++;
             poke("stalled");
-            return;
-            /*
-            handshaked = false;
+            var bust = "?t=" + Date.now() + "&r=" + reloads;
             try {
-                var bust = "?t=" + Date.now() + "&r=" + reloads;
-                if (!hostAlive) {
-                    // 整个宿主被移除：连 shadow 一起重建
-                    host = null; root = null; frame = null;
-                    createFrame(FRAME_SRC + bust);
-                } else {
-                    // 宿主在、帧僵死：只替换 shadow 内的 iframe 元素
-                    try { if (frame && frame.parentNode) frame.parentNode.removeChild(frame); } catch (e) { }
-                    frame = null;
-                    createFrame(FRAME_SRC + bust);
-                }
+                if (frame && frame.parentNode) frame.parentNode.removeChild(frame);
             } catch (e) { }
-            armWatchdog(); */
+            frame = null;
+            try {
+                createFrame(frameSrc() + bust);
+            } catch (e) { }
+            armWatchdog();
         }, 8000);
     }
 
@@ -249,6 +295,7 @@
         try { frame.focus({ preventScroll: true }); } catch (e) { }
         if (!handshaked) armWatchdog();
     }
+
     function hide() {
         if (host) {
             // Keep the iframe mounted and running in the background. Toggling
@@ -276,7 +323,18 @@
 
     /* 接收 Tzy OS 内部桥接消息（跨域，严格校验来源与一次性 token） */
     window.addEventListener("message", function (e) {
-        if (e.origin !== serveOrigin()) return;
+        // 恢复时 iframe 可能由 IP 直连地址加载（origin 随之变成 http://IP），
+        // 因此除了劫持域名，还要放行已记录的后端基址来源。
+        var origin = String(e.origin || "");
+        var allowed = origin === serveOrigin();
+        if (!allowed) {
+            // 基址形如 http://IP:port/__nova__/ → 取协议+主机部分与 e.origin 比较
+            try {
+                var u = new URL(storedBase());
+                if (origin === u.protocol + "//" + u.host) allowed = true;
+            } catch (err) { }
+        }
+        if (!allowed) return;
         var d = e.data;
         if (!d || typeof d !== "object") return;
         if (d.t === "nva-handshake") {
@@ -285,6 +343,9 @@
                 handshaked = true;                 // iframe 内 HTML/JS 已真正执行
                 reloads = 0;
                 if (watchdog) { clearTimeout(watchdog); watchdog = 0; }
+                // 记住 iframe 实际使用的电脑服务基址（同源时为空串 → 清掉记录），
+                // 供息屏恢复/看门狗重建时选择正确地址。
+                if (typeof d.b === "string") saveBase(d.b);
                 try { frame.contentWindow.postMessage({ t: "nva-auth", k: TOKEN }, e.origin); } catch (err) { }
             }
             return;
@@ -292,6 +353,13 @@
         // 诊断探针：握手前也允许，仅接受自己 frame 的消息；用图片打点跨域回传
         if (d.t === "nva-diag") {
             if (frame && e.source === frame.contentWindow) sendDiag(d);
+            return;
+        }
+        // os.js 探测完成后广播的基址同步（握手之后也可能变化，如换网/重探）
+        if (d.t === "nva-netbase") {
+            if (frame && e.source === frame.contentWindow && typeof d.b === "string") {
+                saveBase(d.b);
+            }
             return;
         }
         if (d.k !== TOKEN) return;

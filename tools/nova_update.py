@@ -33,16 +33,26 @@ def main():
         sys.exit(1)
 
     if args.dry_run:
+        import os as _os
         import re
-        pat = re.compile(r'((?:src|href)=")([^":/#][^"?]*)\?v=\d+(")')
+        # 与 toolkit.bump_entry_versions 使用同一条正则，否则 --dry-run 会漏报
+        # 无 ?v= 或非数字版本的引用（如新加的 apps/search.js）。
+        pat = re.compile(r'((?:src|href)=")((?!https?:|data:|blob:|#|//)[^"?#]+)(?:\?[^"#]*)?(#[^"]*)?(")', re.I)
         hits = set()
-        for name in os.listdir(root):
-            if name.endswith(".html"):
-                html = open(os.path.join(root, name), encoding="utf-8").read()
+        for dirpath, dirnames, filenames in _os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in
+                           {"dist", "archive", "logs", "node_modules", "__pycache__", ".git"}]
+            for name in filenames:
+                if not name.endswith(".html"):
+                    continue
+                html = open(_os.path.join(dirpath, name), encoding="utf-8").read()
                 for m in pat.finditer(html):
                     rel = m.group(2)
-                    fp = os.path.join(root, rel.replace("/", os.sep))
-                    if os.path.isfile(fp):
+                    if rel.startswith("/"):
+                        fp = _os.path.join(root, rel.lstrip("/").replace("/", _os.sep))
+                    else:
+                        fp = _os.path.normpath(_os.path.join(dirpath, rel.replace("/", _os.sep)))
+                    if _os.path.isfile(fp):
                         hits.add(rel)
         for h in sorted(hits):
             print("  would check:", h)

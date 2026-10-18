@@ -35,3 +35,9 @@ novel_exports/
 
 # lncrawl 上游参考克隆（仅用于移植站点，含 .git，不入库）
 archive/lncrawl-ref/
+
+# 应用安装时落盘到电脑的静态文件目录（运行时生成，见 toolkit.app_data_*）
+apps_data/
+
+# 本地打包临时目录（build_all / 手动解包构建）
+build/

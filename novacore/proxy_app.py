@@ -205,6 +205,27 @@ def create_proxy_app():
                 while rel.startswith("wp/__nova__/wp/"):
                     rel = "wp/" + rel[len("wp/__nova__/wp/"):]
                 return serve_web_proxy(rel[3:], request.method)
+            # 应用磁盘文件：apps_data/<应用id>/<包内相对路径>
+            # 平板安装时已把包内文件同步到电脑磁盘，这里以普通静态文件提供，
+            # 应用页面可直接以 HTTP 地址引用（可被浏览器长期缓存、可 iframe 加载）。
+            if rel.startswith("apps-data/"):
+                if request.method == "OPTIONS":
+                    return api_preflight()
+                if request.method not in ("GET", "HEAD"):
+                    abort(405)
+                rest = rel[len("apps-data/"):]
+                app_id, _, sub_rel = rest.partition("/")
+                fp = toolkit.app_data_file(app_id, sub_rel)
+                if not fp:
+                    abort(404)
+                ctype = (mimetypes.guess_type(fp)[0] or
+                         "application/octet-stream").split(";")[0].strip()
+                resp = send_file(fp, mimetype=ctype, conditional=True)
+                # 文件内容随安装/更新变化，用 no-cache + ETag 校验，避免旧页残留。
+                resp.headers["Cache-Control"] = "no-cache"
+                # IP 直连时平板跨域引用这些文件（iframe/图片/fetch），需放行。
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
             # 平板同源系统操作：更新缓存版本号、下载备份 zip（管理端口仅本机可达，故挂这里）
             if rel.startswith("sys/"):
                 if request.method == "OPTIONS":
@@ -288,6 +309,27 @@ def create_proxy_app():
                                      as_attachment=False, conditional=True)
                     resp.headers["Cache-Control"] = "no-store"
                     return resp
+                # 应用文件落盘：平板安装 .tzyp 时把包内文件同步到电脑磁盘
+                # apps_data/<id>/，此后页面/脚本直接用 HTTP 地址加载真实文件，
+                # 不再每次运行从 IndexedDB 生成 blob URL。
+                if sub == "app-data-begin" and request.method == "POST":
+                    body = request.get_json(force=True, silent=True) or {}
+                    data, status = toolkit.app_data_begin(body.get("id", ""))
+                    return jsonify(data), status
+                if sub == "app-data-put" and request.method == "POST":
+                    data, status = toolkit.app_data_put(
+                        request.args.get("id", ""), request.args.get("p", ""),
+                        request.stream)
+                    return jsonify(data), status
+                if sub == "app-data-remove" and request.method == "POST":
+                    body = request.get_json(force=True, silent=True) or {}
+                    data, status = toolkit.app_data_remove(body.get("id", ""))
+                    return jsonify(data), status
+                if sub == "app-data-ensure" and request.method in ("POST", "GET"):
+                    body = request.get_json(force=True, silent=True) or {}
+                    app_id = body.get("id") or request.args.get("id", "")
+                    data, status = toolkit.app_data_ensure(app_id)
+                    return jsonify(data), status
                 abort(404)
             # 小说下载后端：本机 novelsrc 聚合服务（按需拉起 + 流式反代），
             # 平板端小说应用通过 /__nova__/novel/api/* 调用。
