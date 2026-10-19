@@ -45,8 +45,33 @@ def api_preflight():
     return resp
 
 
+def _all_local_ipv4():
+    """枚举本机全部 IPv4（含热点、多网卡、虚拟网卡）。
+    仅靠 local_ip() 单播出口地址会漏掉平板实际使用的网卡地址，
+    导致 IP 直连打到“非白名单”时整个挂载点被当外部流量透传而 502。"""
+    ips = set()
+    try:
+        import socket as _s
+        host = _s.gethostname()
+        for info in _s.getaddrinfo(host, None, _s.AF_INET):
+            ips.add(info[4][0])
+    except Exception:
+        pass
+    # 再补充常见探测路径（不依赖主机名解析是否完整）
+    for probe in ("223.5.5.5", "8.8.8.8"):
+        try:
+            import socket as _s
+            sk = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+            sk.connect((probe, 53))
+            ips.add(sk.getsockname()[0])
+            sk.close()
+        except Exception:
+            pass
+    return ips
+
+
 def lan_hosts():
-    """所有可直连本机服务的 Host：热点网关 / 本机 IP / 应答 IP / 回环。
+    """所有可直连本机服务的 Host：热点网关 / 本机全部网卡 IP / 应答 IP / 回环。
     断 DNS 劫持后，平板凭这些地址（无需域名解析）仍能访问挂载点与 API。"""
     s = {"127.0.0.1", "localhost"}
     for fn in (hotspot_ip, local_ip, answer_ip):
@@ -56,6 +81,9 @@ def lan_hosts():
                 s.add(str(v).lower())
         except Exception:
             pass
+    for ip in _all_local_ipv4():
+        if ip:
+            s.add(str(ip).lower())
     return s
 
 

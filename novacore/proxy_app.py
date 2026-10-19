@@ -48,6 +48,37 @@ def create_proxy_app():
                     request.method, path[:300], resp.status_code, ua[:80]))
         except Exception:
             pass
+        # 统一 CORS：断劫持后平板用 http://<电脑IP>/__nova__/ 直连，属于跨域。
+        # 此前只有 api/*（_api_json）与 novel/* 带了 ACAO，导致 sys/backup、
+        # sys/update、sys/app-catalog、api/search/stream 在 IP 直连下被浏览器
+        # 拦截——表现为“备份不能用、应用列表空白、AI failed to fetch”，
+        # 而文件/小说/音乐正常。这里在出口统一补齐，避免逐处遗漏。
+        try:
+            mount = mount_prefix()
+            if request.path.startswith(mount):
+                if not resp.headers.get("Access-Control-Allow-Origin"):
+                    resp.headers["Access-Control-Allow-Origin"] = "*"
+                if request.method == "OPTIONS":
+                    resp.headers.setdefault(
+                        "Access-Control-Allow-Methods",
+                        "GET,POST,HEAD,OPTIONS")
+                    resp.headers.setdefault(
+                        "Access-Control-Allow-Headers",
+                        request.headers.get("Access-Control-Request-Headers")
+                        or "Content-Type")
+                    resp.headers.setdefault("Access-Control-Max-Age", "86400")
+                # 让前端能读到文件名等自定义头
+                existing = resp.headers.get("Access-Control-Expose-Headers")
+                need = "X-File-Name,Content-Disposition,Content-Type"
+                if existing:
+                    if "X-File-Name" not in existing:
+                        need = existing + "," + need
+                    else:
+                        need = None
+                if need:
+                    resp.headers["Access-Control-Expose-Headers"] = need
+        except Exception:
+            pass
         return resp
 
     def route_base(host):
@@ -195,7 +226,11 @@ def create_proxy_app():
         #    a) 劫持域名访问（serve_host）；
         #    b) 断劫持后平板直连热点/本机 IP（192.168.137.1 等），无需域名解析。
         valid_hosts = set([str(cfg("serve_host", "")).lower()]) | lan_hosts()
-        if host in valid_hosts and ("/" + path).startswith(prefix):
+        # 挂载点路径本身已足够定位本服务：只要请求落在 mount 前缀下就按本机
+        # 服务处理，不再强依赖 Host 是否命中白名单。Host 白名单只用于决定
+        # “哪些域名是劫持域名”，否则换网卡/多网段直连时会被误判成外部流量。
+        on_mount = ("/" + path).startswith(prefix)
+        if on_mount:
             rel = ("/" + path)[len(prefix):]
             # 网页代理：同源改写任意站点（含 HTTPS），供内置浏览器使用
             if rel.startswith("wp/"):

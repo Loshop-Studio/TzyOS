@@ -254,7 +254,17 @@
         answerEl.textContent = acc;
         list.scrollTop = list.scrollHeight;
       }
+      function humanize(msg) {
+        var m = String(msg || "");
+        if (/failed to fetch|networkerror|load failed/i.test(m)) {
+          return "无法连接电脑服务（网络中断、IP 直连被拦截或在线模式已关闭）。" +
+            "请检查设置页顶部的在线开关与电脑连接后重试。";
+        }
+        if (/HTTP 5\d\d/.test(m)) return "电脑服务内部错误：" + m;
+        return m;
+      }
       function fail(msg) {
+        msg = humanize(msg);
         state.busy = false;
         btnSend.disabled = false;
         answerEl.textContent = "失败：" + msg;
