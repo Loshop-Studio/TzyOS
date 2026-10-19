@@ -2387,8 +2387,9 @@
       if (!entries.length) throw new Error("空包");
       var base = APPS_ROOT + "/" + meta.id;
       pg("clear", 0, entries.length);
-      return (apps[meta.id] ? vfs.del(base) : Promise.resolve())
-        ["catch"](function () { return null; })
+      // 无条件清空旧目录：此前只在 apps[id] 已加载时才删，导致全新安装、
+      // 加载失败的应用或卸载后重装时旧版本文件残留，表现为“更新了还是旧代码”。
+      return vfs.del(base)["catch"](function () { return null; })
         .then(function () { return vfs.mkdir(base)["catch"](function () { return null; }); })
         .then(function () {
           var iconData = "";
