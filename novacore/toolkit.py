@@ -461,23 +461,65 @@ def app_data_ensure(app_id):
         return {"ok": False, "error": "应用目录不可用"}, 500
     stamp = _lib_stamp(app_id)
     stamp_file = os.path.join(dest, ".nova_stamp")
-    try:
-        if os.path.isfile(stamp_file):
-            with open(stamp_file, "r", encoding="utf-8") as f:
-                if f.read().strip() == str(stamp):
-                    return {"ok": True, "id": app_id, "stamp": stamp,
-                            "copied": False}, 200
-    except OSError:
-        pass
+    manifest_file = os.path.join(dest, ".nova_files")
+    # 来源文件清单：用于检测“目录被部分删除/篡改”。只比对 stamp 会漏掉
+    # 缓存清理导致的个别文件缺失（表现为页面 404、样式/组件不显示，
+    # 且因 stamp 未变而永不重拷）。
+    want_files = []
+    for dirpath, _dirs, files in os.walk(src):
+        for name in files:
+            want_files.append(os.path.relpath(os.path.join(dirpath, name), src)
+                              .replace(os.sep, "/"))
+    want_files.sort()
+    want_sizes = {}
+    for rel in want_files:
+        try:
+            want_sizes[rel] = os.path.getsize(os.path.join(src, rel.replace("/", os.sep)))
+        except OSError:
+            want_sizes[rel] = -1
+    if _app_data_intact(dest, stamp, stamp_file, manifest_file, want_files, want_sizes):
+        return {"ok": True, "id": app_id, "stamp": stamp,
+                "copied": False}, 200
     try:
         if os.path.isdir(dest):
             shutil.rmtree(dest, ignore_errors=True)
         shutil.copytree(src, dest)
         with open(stamp_file, "w", encoding="utf-8") as f:
             f.write(str(stamp))
+        with open(manifest_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(want_files))
     except OSError as exc:
         return {"ok": False, "error": "落库失败：%s" % exc}, 500
-    return {"ok": True, "id": app_id, "stamp": stamp, "copied": True}, 200
+    return {"ok": True, "id": app_id, "stamp": stamp, "copied": True,
+            "files": len(want_files)}, 200
+
+
+def _app_data_intact(dest, stamp, stamp_file, manifest_file, want_files, want_sizes=None):
+    """落库目录是否与来源完全一致（版本戳 + 文件清单 + 大小校验）。"""
+    if not os.path.isdir(dest):
+        return False
+    try:
+        with open(stamp_file, "r", encoding="utf-8") as f:
+            if f.read().strip() != str(stamp):
+                return False
+        with open(manifest_file, "r", encoding="utf-8") as f:
+            have = [x for x in f.read().split("\n") if x]
+        if have != want_files:
+            return False
+    except OSError:
+        return False
+    # 逐文件存在性与大小校验，捕获被删/被截断
+    for rel in want_files:
+        dst = os.path.join(dest, rel.replace("/", os.sep))
+        try:
+            if not os.path.isfile(dst):
+                return False
+            expect = (want_sizes or {}).get(rel, -1)
+            if expect >= 0 and os.path.getsize(dst) != expect:
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def _ver_key(v):
