@@ -384,9 +384,17 @@ def ai_stream(query, sources):
                 text_parts.append(chunk)
                 yield _sse({"type": "delta", "text": chunk})
         else:
-            for line in r.iter_lines(decode_unicode=True):
-                if not line:
+            # 注意：不能用 iter_lines(decode_unicode=True)。响应若未声明
+            # charset，requests 会按 ISO-8859-1（latin-1）解码，中文会变成
+            # 乱码。这里按字节读取并显式用 UTF-8 解码（带 BOM 兼容）。
+            for raw_line in r.iter_lines(decode_unicode=False):
+                if not raw_line:
                     continue
+                if isinstance(raw_line, bytes):
+                    line = raw_line.decode("utf-8-sig", "replace")
+                else:
+                    line = str(raw_line)
+                line = line.strip("\r")
                 if line.startswith(":"):
                     continue            # SSE 注释/心跳
                 if line.startswith("data:"):

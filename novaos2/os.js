@@ -531,10 +531,14 @@
     var lines = String(text || "").split("\n");
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
+      // 兼容 CRLF：先去掉行尾 \r（否则 "data:{...}\r" 解析会失败）
+      line = line.replace(/\r+$/, "");
       if (!line || line.charAt(0) === ":") continue;
-      if (line.indexOf("data:") === 0) line = line.slice(5).trim();
-      if (!line || line === "[DONE]") continue;
-      try { emit(JSON.parse(line)); } catch (e) { }
+      var t = line.replace(/^\s+/, "");
+      if (t.indexOf("data:") === 0) t = t.slice(5);
+      t = t.trim();
+      if (!t || t === "[DONE]") continue;
+      try { emit(JSON.parse(t)); } catch (e) { }
     }
   }
 
