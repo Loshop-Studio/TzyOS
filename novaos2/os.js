@@ -526,6 +526,18 @@
     });
   }
 
+  // 解析 SSE 文本块，逐帧回调 {type, ...}
+  function parseSseBuffer(text, emit) {
+    var lines = String(text || "").split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (!line || line.charAt(0) === ":") continue;
+      if (line.indexOf("data:") === 0) line = line.slice(5).trim();
+      if (!line || line === "[DONE]") continue;
+      try { emit(JSON.parse(line)); } catch (e) { }
+    }
+  }
+
   var api = {
     fs: function (op, body) { return netCall("api/fs/" + op, body || {}); },
     ftp: function (body) { return netCall("api/ftp", body); },
@@ -553,6 +565,78 @@
     },
     searchStatus: function () { return netCall("api/search/status", {}); },
     searchConfig: function (body) { return netCall("api/search/config", body || {}); },
+    // 校验 AI 配置修改口令（后端常量，非强安全边界）
+    searchVerify: function (password) {
+      return netCall("api/search/verify", { password: String(password || "") });
+    },
+    // AI 对话（useSearch 决定是否先联网搜索）
+    searchAsk: function (query, options) {
+      options = options || {};
+      return netCall("api/search/ask", {
+        query: String(query || ""),
+        use_search: options.useSearch !== false,
+        limit: options.limit || 8
+      });
+    },
+    // 流式问答：SSE 逐帧回调 onEvent(evt)，返回 cancel()
+    searchStream: function (query, options, onEvent) {
+      options = options || {};
+      var cancelled = false;
+      var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      var body = JSON.stringify({
+        query: String(query || ""),
+        mode: options.mode === "ai" ? "ai" : "search",
+        use_search: options.useSearch !== false,
+        limit: options.limit || 8
+      });
+      function emit(e) { if (!cancelled) { try { onEvent(e); } catch (x) { } } }
+      netResolve("api/search/stream").then(function (url) {
+        if (!url || cancelled) { emit({ type: "error", error: "电脑服务不可用（离线模式）" }); return; }
+        return fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: body,
+          signal: ctrl ? ctrl.signal : undefined,
+          cache: "no-store"
+        }).then(function (resp) {
+          if (!resp.ok) {
+            return resp.text().then(function (t) {
+              emit({ type: "error", error: "HTTP " + resp.status + "：" + String(t || "").slice(0, 200) });
+            });
+          }
+          var reader = resp.body && resp.body.getReader ? resp.body.getReader() : null;
+          if (!reader) {
+            return resp.text().then(function (text) {
+              parseSseBuffer(text, emit);
+              emit({ type: "done", text: "" });
+            });
+          }
+          var decoder = new TextDecoder("utf-8");
+          var buf = "";
+          function pump() {
+            return reader.read().then(function (r) {
+              if (r.done) { parseSseBuffer(buf + "\n\n", emit); return; }
+              if (cancelled) { try { reader.cancel(); } catch (e) { } return; }
+              buf += decoder.decode(r.value, { stream: true });
+              var idx;
+              while ((idx = buf.indexOf("\n\n")) >= 0) {
+                var chunk = buf.slice(0, idx);
+                buf = buf.slice(idx + 2);
+                parseSseBuffer(chunk + "\n\n", emit);
+              }
+              return pump();
+            });
+          }
+          return pump();
+        });
+      })["catch"](function (err) {
+        if (!cancelled) emit({ type: "error", error: (err && err.message) || "网络错误" });
+      });
+      return function cancel() {
+        cancelled = true;
+        try { if (ctrl) ctrl.abort(); } catch (e) { }
+      };
+    },
     // 内置应用静态站落库：让电脑把 novaos2/lib/<id>/ 复制到 apps_data/<id>/，
     // 返回可直接加载的 HTTP 地址（电脑不可达时返回 null，调用方回退 lib/ 相对路径）。
     libAppUrl: function (id, page) {

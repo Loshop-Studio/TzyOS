@@ -1,8 +1,10 @@
 /* ============================================================
- * Tzy OS · 智能搜索（对话式，走后端联网搜索 + 可选云端 AI）
- * 平板只调用同源 api/search，搜索与 AI 请求全部由电脑完成。
- * 回答简短、有来源；AI 未配置或超额时后端自动回退本地摘要。
- * 设置（Base URL / API Key / 模型 / token 与每日次数限额）存电脑 config.json。
+ * Tzy OS · 智能搜索 / AI 对话
+ *   - AI 模式：可勾选“联网搜索”，结果流式输出（SSE）
+ *   - 搜索模式：不使用 AI，直接联网搜索并给出来源摘要
+ *   - 来源自动折叠，点击展开
+ *   - AI 配置走侧边栏，修改需口令（后端校验）
+ *   - 对话记录保存在本机（localStorage），AI 配置保存在电脑端 config.json
  * Loshop & Cpt
  * ============================================================ */
 (function () {
@@ -13,17 +15,27 @@
     name: "智能搜索",
     icon: "🔎",
     tone: "tone-blue",
-    version: "1.0.0",
+    version: "2.0.0",
     maximize: true,
     open: function (root, OS) { build(root, OS); }
   });
 
   var HISTORY_KEY = "nova2.search.history";
+  var MODE_KEY = "nova2.search.mode";
+  var USESEARCH_KEY = "nova2.search.useSearch";
   var HISTORY_MAX = 40;
 
   function esc(s) { return String(s == null ? "" : s); }
 
   function build(root, OS) {
+    var state = {
+      mode: OS.store.get(MODE_KEY, "ai") === "search" ? "search" : "ai",
+      useSearch: OS.store.get(USESEARCH_KEY, true) !== false,
+      busy: false,
+      cancelStream: null,
+      history: loadHistory()
+    };
+
     var wrap = OS.h("div", "nv-search");
     wrap.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;" +
       "display:flex;flex-direction:column;background:#f7f4ec;color:#24252a;";
@@ -36,23 +48,52 @@
     title.style.cssText = "font-weight:600;margin-right:auto;";
     var status = OS.h("span", "", "就绪");
     status.style.cssText = "font-size:11px;color:rgba(242,238,229,.65);";
-    var btnConfig = OS.h("button", "nv-btn", "设置");
+
+    // 模式切换
+    var seg = OS.h("div", "nv-seg");
+    seg.style.cssText = "display:flex;border:1px solid #4a4f5c;border-radius:8px;overflow:hidden;";
+    function modeBtn(key, label) {
+      var b = OS.h("button", "", label);
+      b.style.cssText = "background:transparent;border:0;color:#f2eee5;padding:5px 10px;" +
+        "font-size:12px;cursor:pointer;";
+      b._key = key;
+      b.addEventListener("click", function () { setMode(key); });
+      return b;
+    }
+    var btnAI = modeBtn("ai", "AI");
+    var btnSearch = modeBtn("search", "搜索");
+    seg.appendChild(btnAI); seg.appendChild(btnSearch);
+
+    var btnCfg = OS.h("button", "nv-btn", "设置");
     var btnClear = OS.h("button", "nv-btn", "清空");
-    bar.appendChild(title); bar.appendChild(status);
-    bar.appendChild(btnConfig); bar.appendChild(btnClear);
+    bar.appendChild(title); bar.appendChild(status); bar.appendChild(seg);
+    bar.appendChild(btnCfg); bar.appendChild(btnClear);
     wrap.appendChild(bar);
 
+    /* ---------- AI 选项条 ---------- */
+    var opts = OS.h("div", "");
+    opts.style.cssText = "flex:0 0 auto;display:flex;align-items:center;gap:8px;" +
+      "padding:6px 12px;background:#efe9db;border-bottom:1px solid #ddd6c7;font-size:12px;color:#6f6857;";
+    var cbSearch = document.createElement("input");
+    cbSearch.type = "checkbox";
+    cbSearch.className = "nv-checkbox";
+    var lblSearch = OS.h("span", "", "启用联网搜索");
+    var hintAI = OS.h("span", "", "");
+    hintAI.style.cssText = "margin-left:auto;color:#9a9079;";
+    opts.appendChild(cbSearch); opts.appendChild(lblSearch); opts.appendChild(hintAI);
+    wrap.appendChild(opts);
+
     /* ---------- 消息区 ---------- */
-    var list = OS.h("div", "nv-search-list");
+    var list = OS.h("div", "");
     list.style.cssText = "flex:1;min-height:0;overflow:auto;padding:16px 14px;";
     wrap.appendChild(list);
 
-    var empty = OS.h("div", "", "输入问题，例如：华为平板怎么截屏");
+    var empty = OS.h("div", "", "输入问题开始对话；搜索模式不调用 AI，直接返回来源摘要");
     empty.style.cssText = "color:#9a9079;font-size:14px;text-align:center;margin-top:40px;";
     list.appendChild(empty);
 
     /* ---------- 输入区 ---------- */
-    var composer = OS.h("div", "nv-search-composer");
+    var composer = OS.h("div", "");
     composer.style.cssText = "flex:0 0 auto;display:flex;gap:8px;padding:10px;" +
       "border-top:1px solid #ddd6c7;background:#eee8dc;";
     var input = document.createElement("textarea");
@@ -60,137 +101,330 @@
     input.rows = 1;
     input.style.cssText = "flex:1;min-width:0;resize:none;border:1px solid #cfc6b5;" +
       "border-radius:6px;padding:9px;font:14px sans-serif;background:#fff;";
-    var btnSend = OS.h("button", "nv-btn primary", "搜索");
+    var btnSend = OS.h("button", "nv-btn primary", "发送");
     composer.appendChild(input); composer.appendChild(btnSend);
     wrap.appendChild(composer);
     root.appendChild(wrap);
 
-    var busy = false;
-
-    /* ---------- 历史 ---------- */
+    /* ---------- 历史持久化 ---------- */
     function loadHistory() {
       var h = OS.store.get(HISTORY_KEY, []);
       return Array.isArray(h) ? h : [];
     }
     function saveHistory(h) {
-      OS.store.set(HISTORY_KEY, h.slice(-HISTORY_MAX));
+      state.history = h.slice(-HISTORY_MAX);
+      OS.store.set(HISTORY_KEY, state.history);
+    }
+
+    function setMode(m) {
+      state.mode = m;
+      OS.store.set(MODE_KEY, m);
+      renderMode();
+      renderHistory();
+    }
+    function renderMode() {
+      var ai = state.mode === "ai";
+      btnAI.style.background = ai ? "#c03f2d" : "transparent";
+      btnSearch.style.background = ai ? "transparent" : "#c03f2d";
+      opts.style.display = ai ? "flex" : "none";
+      cbSearch.checked = state.useSearch;
+      hintAI.textContent = ai
+        ? (state.useSearch ? "AI + 联网搜索" : "AI 直接回答（不联网）")
+        : "纯搜索模式 · 不调用 AI";
+      input.placeholder = ai
+        ? "向 AI 提问…（Enter 发送，Shift+Enter 换行）"
+        : "输入搜索关键词…（Enter 发送）";
     }
 
     /* ---------- 渲染 ---------- */
     function bubble(kind, text) {
-      var el = OS.h("div", "nv-search-msg");
+      var el = OS.h("div", "");
       var mine = kind === "user";
       el.style.cssText = "max-width:86%;margin:8px 0;padding:10px 12px;" +
         "border-radius:" + (mine ? "12px 4px 12px 12px" : "4px 12px 12px 12px") + ";" +
         "background:" + (mine ? "#c03f2d" : "#fff") + ";" +
         "color:" + (mine ? "#fff" : "#24252a") + ";" +
         "box-shadow:0 1px 2px rgba(45,35,20,.12);white-space:pre-wrap;" +
-        "word-break:break-word;line-height:1.5;" +
+        "word-break:break-word;line-height:1.55;" +
         (mine ? "margin-left:auto;" : "");
       el.textContent = esc(text);
       return el;
     }
 
-    function sourcesBlock(sources) {
+    // 来源折叠块：默认折叠，点击标题展开
+    function sourcesBlock(sources, engine, usedSearch) {
       var box = document.createElement("div");
       box.style.cssText = "margin:2px 0 10px;font-size:12.5px;color:#6f6857;";
-      if (!sources || !sources.length) { box.textContent = "（无来源）"; return box; }
+      var count = (sources || []).length;
       var head = document.createElement("div");
-      head.textContent = "参考来源：";
-      head.style.cssText = "margin-bottom:4px;color:#8a8271;";
-      box.appendChild(head);
-      sources.forEach(function (s, i) {
-        var row = document.createElement("div");
-        row.style.cssText = "margin:3px 0;line-height:1.4;";
-        var a = document.createElement("a");
-        a.textContent = (i + 1) + ". " + (s.title || s.domain || s.url);
-        a.href = s.url || "#";
-        a.target = "_blank";
-        a.rel = "noopener noreferrer";
-        a.style.cssText = "color:#2f5d8a;text-decoration:none;";
-        row.appendChild(a);
-        if (s.domain) {
-          var dom = document.createElement("span");
-          dom.textContent = "  " + s.domain;
-          dom.style.cssText = "color:#a59c89;";
-          row.appendChild(dom);
-        }
-        box.appendChild(row);
+      head.style.cssText = "cursor:pointer;user-select:none;color:#2f5d8a;" +
+        "padding:4px 0;display:flex;align-items:center;gap:6px;";
+      var arrow = OS.h("span", "", "▸");
+      var label = "参考来源 · " + count + " 条" +
+        (engine ? "（" + engine + "）" : "") + (usedSearch === false ? "（未联网）" : "");
+      head.appendChild(arrow);
+      head.appendChild(OS.h("span", "", label));
+      var bodyBox = document.createElement("div");
+      bodyBox.style.cssText = "display:none;margin-top:2px;padding-left:14px;";
+      if (!count) {
+        bodyBox.appendChild(OS.h("div", "", "（无来源）"));
+      } else {
+        sources.forEach(function (s, i) {
+          var row = document.createElement("div");
+          row.style.cssText = "margin:4px 0;line-height:1.45;";
+          var a = document.createElement("a");
+          a.textContent = (i + 1) + ". " + (s.title || s.domain || s.url);
+          a.href = s.url || "#";
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.style.cssText = "color:#2f5d8a;text-decoration:none;";
+          row.appendChild(a);
+          if (s.domain) {
+            var dom = OS.h("span", "", "  " + s.domain);
+            dom.style.cssText = "color:#a59c89;";
+            row.appendChild(dom);
+          }
+          if (s.snippet) {
+            var sn = OS.h("div", "", s.snippet);
+            sn.style.cssText = "color:#8a8271;font-size:11.5px;margin-top:2px;";
+            row.appendChild(sn);
+          }
+          bodyBox.appendChild(row);
+        });
+      }
+      var open = false;
+      head.addEventListener("click", function () {
+        open = !open;
+        bodyBox.style.display = open ? "block" : "none";
+        arrow.textContent = open ? "▾" : "▸";
       });
+      box.appendChild(head);
+      box.appendChild(bodyBox);
       return box;
     }
 
-    function showEmpty(show) {
-      empty.style.display = show ? "" : "none";
-    }
+    function showEmpty(show) { empty.style.display = show ? "" : "none"; }
 
     function renderHistory() {
       OS.clear(list);
-      var hist = loadHistory();
-      if (!hist.length) { list.appendChild(empty); showEmpty(true); return; }
+      if (!state.history.length) { list.appendChild(empty); showEmpty(true); return; }
       showEmpty(false);
-      hist.forEach(function (item) {
+      state.history.forEach(function (item) {
         if (item.q) list.appendChild(bubble("user", item.q));
         if (item.a) list.appendChild(bubble("ai", item.a));
-        if (item.sources && item.sources.length) list.appendChild(sourcesBlock(item.sources));
+        if (item.sources && item.sources.length) {
+          list.appendChild(sourcesBlock(item.sources, item.engine, item.usedSearch));
+        }
       });
       list.scrollTop = list.scrollHeight;
     }
 
     /* ---------- 发送 ---------- */
-    function ask(query) {
-      if (busy || !query) return;
-      busy = true;
-      btnSend.disabled = true;
-      showEmpty(false);
-      list.appendChild(bubble("user", query));
-      var thinking = bubble("ai", "正在搜索…");
-      list.appendChild(thinking);
-      list.scrollTop = list.scrollHeight;
-      status.textContent = "搜索中…";
-
-      OS.api.search(query, { limit: 8 }).then(function (r) {
-        busy = false;
-        btnSend.disabled = false;
-        if (!r || !r.ok) {
-          thinking.textContent = "搜索失败：" + ((r && r.error) || "电脑服务不可用");
-          status.textContent = "失败";
-          return;
-        }
-        thinking.textContent = r.answer || "（无回答）";
-        if (r.sources && r.sources.length) {
-          list.appendChild(sourcesBlock(r.sources));
-        }
-        var via = r.usedAI ? "云端 AI" : "本地摘要";
-        status.textContent = "完成 · " + via + (r.engine ? " · " + r.engine : "");
-        if (r.usage && r.usage.dailyCalls) {
-          status.textContent += " · 今日 " + r.usage.used + "/" + r.usage.dailyCalls;
-        }
-        var hist = loadHistory();
-        hist.push({ q: query, a: r.answer || "", sources: r.sources || [], at: Date.now() });
-        saveHistory(hist);
-        list.scrollTop = list.scrollHeight;
-      }, function (err) {
-        busy = false;
-        btnSend.disabled = false;
-        thinking.textContent = "搜索失败：" + ((err && err.message) || "网络错误");
-        status.textContent = "失败";
-      });
+    function finishTurn(item) {
+      var h = state.history.slice();
+      h.push(item);
+      saveHistory(h);
     }
 
-    function submit() {
+    function send() {
+      if (state.busy) return;
       var q = input.value.trim();
       if (!q) return;
       input.value = "";
-      ask(q);
+      state.busy = true;
+      btnSend.disabled = true;
+      showEmpty(false);
+      list.appendChild(bubble("user", q));
+      var answerEl = bubble("ai", "");
+      var answerBox = OS.h("div", "");
+      answerBox.style.cssText = "max-width:86%;";
+      answerBox.appendChild(answerEl);
+      list.appendChild(answerBox);
+      list.scrollTop = list.scrollHeight;
+      answerEl.textContent = state.mode === "search" ? "正在搜索…" : "正在思考…";
+      status.textContent = state.mode === "search" ? "搜索中…" : "生成中…";
+
+      var acc = "";
+      var sources = [], engine = "", usedSearch = state.mode !== "ai" || state.useSearch;
+      var sourcesEl = null;
+      var mode = state.mode;
+
+      function appendDelta(text) {
+        acc += text;
+        answerEl.textContent = acc;
+        list.scrollTop = list.scrollHeight;
+      }
+      function fail(msg) {
+        state.busy = false;
+        btnSend.disabled = false;
+        answerEl.textContent = "失败：" + msg;
+        status.textContent = "失败";
+        finishTurn({ q: q, a: "失败：" + msg, sources: sources, engine: engine,
+                     usedSearch: usedSearch, at: Date.now(), mode: mode });
+      }
+      function done(text, srcs, eng) {
+        state.busy = false;
+        btnSend.disabled = false;
+        if (text) { acc = text; answerEl.textContent = acc; }
+        if (srcs) sources = srcs;
+        if (eng) engine = eng;
+        if (sourcesEl && sourcesEl.parentNode) sourcesEl.parentNode.removeChild(sourcesEl);
+        sourcesEl = sourcesBlock(sources, engine, usedSearch);
+        list.appendChild(sourcesEl);
+        status.textContent = "完成 · " + (mode === "search" ? "搜索" : "AI") +
+          (srcs && srcs.length ? " · " + srcs.length + " 条来源" : "");
+        list.scrollTop = list.scrollHeight;
+        finishTurn({ q: q, a: acc, sources: sources, engine: engine,
+                     usedSearch: usedSearch, at: Date.now(), mode: mode });
+      }
+
+      state.cancelStream = OS.api.searchStream(q, {
+        mode: mode,
+        useSearch: state.useSearch,
+        limit: 8
+      }, function (evt) {
+        if (!evt) return;
+        if (evt.type === "delta") appendDelta(evt.text || "");
+        else if (evt.type === "meta") { usedSearch = !!evt.usedSearch; }
+        else if (evt.type === "sources") { sources = evt.sources || []; engine = evt.engine || ""; usedSearch = !!evt.usedSearch; }
+        else if (evt.type === "done") {
+          done(evt.text || "", evt.sources || sources, evt.engine || engine);
+          if (evt.usage && evt.usage.dailyCalls) {
+            status.textContent += " · 今日 " + evt.usage.used + "/" + evt.usage.dailyCalls;
+          }
+        } else if (evt.type === "error") fail(evt.error || "未知错误");
+      });
     }
 
-    btnSend.addEventListener("click", submit);
-    input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+    /* ---------- 配置侧边栏 ---------- */
+    function openConfigSidebar() {
+      OS.api.searchStatus().then(function (st) {
+        st = st || {};
+        var mask = OS.h("div", "nv-mask nv-modal-top");
+        var panel = OS.h("div", "");
+        panel.style.cssText = "position:fixed;top:0;right:0;bottom:0;width:min(360px,88vw);" +
+          "background:#fbf9f4;box-shadow:-8px 0 30px rgba(0,0,0,.28);z-index:12000;" +
+          "display:flex;flex-direction:column;padding:16px;box-sizing:border-box;overflow:auto;";
+        var head = OS.h("div", "");
+        head.style.cssText = "display:flex;align-items:center;margin-bottom:12px;";
+        head.appendChild(OS.h("div", "", "AI 配置")).style.cssText = "font-weight:700;flex:1;";
+        var bClose = OS.h("button", "nv-btn", "关闭");
+        head.appendChild(bClose);
+        panel.appendChild(head);
+
+        var info = OS.h("div", "");
+        info.style.cssText = "font-size:12px;color:#6f6857;line-height:1.7;margin-bottom:12px;";
+        function infoText(s) {
+          return "状态：" + (s.ready ? "已就绪" : (s.enabled ? "已启用但配置不全" : "未启用")) +
+            "\n模型：" + (s.model || "（未填写）") +
+            "\n接口：" + (s.url || "（未填写）") +
+            "\nKey：" + (s.keySet ? "已设置" : "未设置") +
+            "\n今日：" + ((s.usage && s.usage.used) || 0) + "/" +
+            ((s.usage && s.usage.dailyCalls) || "?") + " 次" +
+            "，累计 " + ((s.usage && s.usage.tokens) || 0) + " tokens";
+        }
+        info.textContent = infoText(st);
+        info.style.whiteSpace = "pre-wrap";
+        panel.appendChild(info);
+
+        function field(label, value, type) {
+          var box = OS.h("div", "");
+          box.style.cssText = "margin-bottom:10px;";
+          var l = OS.h("div", "", label);
+          l.style.cssText = "font-size:12px;color:#817968;margin-bottom:4px;";
+          var i = document.createElement("input");
+          i.type = type || "text";
+          i.className = "nv-input";
+          i.value = value == null ? "" : value;
+          i.style.cssText = "width:100%;box-sizing:border-box;padding:7px;border:1px solid #cfc6b5;" +
+            "border-radius:6px;background:#fff;";
+          box.appendChild(l); box.appendChild(i);
+          return { box: box, input: i };
+        }
+
+        var fPwd = field("修改口令", "", "password");
+        var fKey = field("API Key（留空不变，输入 - 清除）", "", "password");
+        var fUrl = field("接口地址", st.url || "");
+        var fModel = field("模型名", st.model || "");
+        var fMax = field("每次回答 token 上限", (st.limits && st.limits.max_tokens) || 400);
+        var fDaily = field("每日调用次数上限", (st.limits && st.limits.dailyCalls) || 50);
+        [fPwd, fKey, fUrl, fModel, fMax, fDaily].forEach(function (f) {
+          panel.appendChild(f.box);
+        });
+
+        var cbEnable = document.createElement("input");
+        cbEnable.type = "checkbox";
+        cbEnable.className = "nv-checkbox";
+        cbEnable.checked = !!st.enabled;
+        var enableRow = OS.h("div", "");
+        enableRow.style.cssText = "display:flex;align-items:center;gap:8px;margin:6px 0 14px;" +
+          "font-size:13px;color:#3a3b3f;";
+        enableRow.appendChild(cbEnable);
+        enableRow.appendChild(OS.h("span", "", "启用云端 AI"));
+        panel.appendChild(enableRow);
+
+        var actions = OS.h("div", "");
+        actions.style.cssText = "display:flex;gap:8px;justify-content:flex-end;";
+        var bSave = OS.h("button", "nv-btn primary", "保存");
+        actions.appendChild(bSave);
+        panel.appendChild(actions);
+
+        var tip = OS.h("div", "");
+        tip.style.cssText = "margin-top:10px;font-size:11.5px;color:#9a9079;line-height:1.6;";
+        tip.textContent = "配置保存在电脑端 config.json；修改需输入口令。对话记录保存在本机。";
+        panel.appendChild(tip);
+
+        mask.appendChild(panel);
+        document.body.appendChild(mask);
+        function close() { if (mask.parentNode) mask.parentNode.removeChild(mask); }
+        bClose.addEventListener("click", close);
+        mask.addEventListener("click", function (e) { if (e.target === mask) close(); });
+
+        bSave.addEventListener("click", function () {
+          bSave.disabled = true;
+          var body = { password: fPwd.input.value };
+          if (fKey.input.value === "-") body.search_ai_key = "";
+          else if (fKey.input.value.trim()) body.search_ai_key = fKey.input.value.trim();
+          if (fUrl.input.value.trim()) body.search_ai_url = fUrl.input.value.trim();
+          if (fModel.input.value.trim()) body.search_ai_model = fModel.input.value.trim();
+          var n1 = parseInt(fMax.input.value, 10);
+          if (!isNaN(n1) && n1 > 0) body.search_ai_max_tokens = Math.min(4000, n1);
+          var n2 = parseInt(fDaily.input.value, 10);
+          if (!isNaN(n2) && n2 > 0) body.search_ai_daily_calls = Math.min(1000, n2);
+          body.search_ai_enable = !!cbEnable.checked;
+          OS.api.searchConfig(body).then(function (r) {
+            bSave.disabled = false;
+            if (r && r.ok) {
+              OS.toast("配置已保存");
+              info.textContent = infoText(r);
+              fPwd.input.value = "";
+              fKey.input.value = "";
+            } else {
+              OS.toast((r && r.error) || "保存失败");
+            }
+          }, function (err) {
+            bSave.disabled = false;
+            OS.toast("保存失败：" + ((err && err.message) || "网络错误"));
+          });
+        });
+      }, function (err) {
+        OS.toast("读取配置失败：" + ((err && err.message) || "电脑服务不可用"));
+      });
+    }
+
+    /* ---------- 事件绑定 ---------- */
+    cbSearch.addEventListener("change", function () {
+      state.useSearch = !!cbSearch.checked;
+      OS.store.set(USESEARCH_KEY, state.useSearch);
+      renderMode();
     });
+    btnSend.addEventListener("click", send);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+    btnCfg.addEventListener("click", openConfigSidebar);
     btnClear.addEventListener("click", function () {
-      OS.dlg.confirm("清空全部搜索记录？", "清空历史").then(function (yes) {
+      OS.dlg.confirm("清空全部对话记录？（不影响 AI 配置）", "清空历史").then(function (yes) {
         if (!yes) return;
         saveHistory([]);
         renderHistory();
@@ -198,66 +432,7 @@
       });
     });
 
-    /* ---------- 设置 ---------- */
-    btnConfig.addEventListener("click", function () {
-      OS.api.searchStatus().then(function (st) {
-        st = st || {};
-        var msg =
-          "云端 AI：" + (st.ready ? "已就绪" : (st.enabled ? "已启用但配置不全" : "未启用")) + "\n" +
-          "模型：" + (st.model || "（未填写）") + "\n" +
-          "接口地址：" + (st.url || "（未填写）") + "\n" +
-          "API Key：" + (st.keySet ? "已设置" : "未设置") + "\n" +
-          "今日用量：" + ((st.usage && st.usage.used) || 0) + "/" +
-          ((st.usage && st.usage.dailyCalls) || "?") + " 次" +
-          "，累计 " + ((st.usage && st.usage.tokens) || 0) + " tokens\n" +
-          "每次回答上限：" + ((st.limits && st.limits.max_tokens) || "?") + " tokens\n\n" +
-          "配置项保存在电脑端 config.json，可在本机管理界面或此处修改。";
-        OS.dlg.alert(msg, "AI 设置状态").then(function () {
-          return OS.dlg.prompt("API Key（留空保持不变，输入 - 表示清除）", "", "设置 API Key");
-        }).then(function (key) {
-          if (key === null) return null;
-          var body = {};
-          if (key === "-") body.search_ai_key = "";
-          else if (key.trim()) body.search_ai_key = key.trim();
-          return OS.dlg.prompt("接口地址，如 https://api.openai.com/v1", st.url || "", "AI 接口地址")
-            .then(function (url) {
-              if (url === null) return null;
-              if (url.trim()) body.search_ai_url = url.trim();
-              return OS.dlg.prompt("模型名，如 gpt-4o-mini", st.model || "", "AI 模型");
-            }).then(function (model) {
-              if (model === null) return null;
-              if (model.trim()) body.search_ai_model = model.trim();
-              return OS.dlg.prompt("每次回答 token 上限（默认 400）",
-                String((st.limits && st.limits.max_tokens) || 400), "Token 限额")
-                .then(function (mt) {
-                  if (mt === null) return null;
-                  var n = parseInt(mt, 10);
-                  if (!isNaN(n) && n > 0) body.search_ai_max_tokens = Math.min(4000, n);
-                  return OS.dlg.prompt("每日 AI 调用次数上限（默认 50）",
-                    String((st.limits && st.limits.dailyCalls) || 50), "每日限额")
-                    .then(function (dc) {
-                      if (dc === null) return null;
-                      var d = parseInt(dc, 10);
-                      if (!isNaN(d) && d > 0) body.search_ai_daily_calls = Math.min(1000, d);
-                      return OS.dlg.confirm("启用云端 AI？\n禁用时只用本地摘要，不产生费用。", "启用 AI")
-                        .then(function (enable) {
-                          body.search_ai_enable = !!enable;
-                          return body;
-                        });
-                    });
-                });
-            });
-        }).then(function (body) {
-          if (!body) return null;
-          return OS.api.searchConfig(body).then(function (r) {
-            OS.toast(r && r.ok ? "设置已保存到电脑" : ((r && r.error) || "保存失败"));
-          });
-        });
-      }, function (err) {
-        OS.toast("读取设置失败：" + ((err && err.message) || "电脑服务不可用"));
-      });
-    });
-
+    renderMode();
     renderHistory();
     status.textContent = OS.net.online() ? "就绪" : "离线";
   }

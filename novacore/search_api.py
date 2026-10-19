@@ -253,37 +253,48 @@ def _chat_url(base):
     return base + "/v1/chat/completions"
 
 
-def ai_summarize(query, sources):
-    """调用云端 AI 输出简短回答；返回 (answer, used_tokens, error)。
+def _build_messages(query, sources, answer_chars):
+    """构造 messages。sources 为空时是纯 AI 对话（不联网搜索）。"""
+    if sources:
+        ctx = []
+        for i, s in enumerate(sources[:6], 1):
+            brief = (s.get("snippet") or "")[:300]
+            ctx.append("%d. %s\n   %s\n   %s" % (i, s.get("title", ""), brief,
+                                                 s.get("url", "")))
+        sys = ("你是简洁的搜索助手。根据给出的搜索结果回答用户，用中文，"
+               "总字数不超过 %d 字。只陈述结果中有依据的内容，不要编造；"
+               "不确定就直说。不要列举网址，结尾不要重复来源列表。"
+               % max(120, answer_chars // 2))
+        user = "问题：%s\n\n搜索结果：\n%s" % (query, "\n".join(ctx))
+    else:
+        sys = ("你是一个简洁的中文助手。直接回答用户问题，可用 Markdown。"
+               "总字数不超过 %d 字。不确定的内容要明确说明，不要编造。"
+               % max(120, answer_chars // 2))
+        user = query
+    return [{"role": "system", "content": sys},
+            {"role": "user", "content": user}]
 
-    失败时返回 error，调用方回退本地摘要。
-    """
+
+def _ai_ready():
+    """返回 (conf, limits, error)。"""
     conf = _ai_config()
     if not (conf["enabled"] and conf["url"] and conf["key"] and conf["model"]):
-        return None, 0, "AI 未启用或配置不完整"
+        return conf, None, "AI 未启用或配置不完整"
     limits = _limits()
-    day, usage = _usage_snapshot()
+    _day, usage = _usage_snapshot()
     if usage["used"] >= limits["daily_calls"]:
-        return None, 0, "今日 AI 次数已用完（%d 次）" % limits["daily_calls"]
+        return conf, limits, "今日 AI 次数已用完（%d 次）" % limits["daily_calls"]
+    return conf, limits, ""
 
-    # 只发送搜索摘要，控制上下文体积与隐私暴露范围
-    ctx = []
-    for i, s in enumerate(sources[:6], 1):
-        brief = (s.get("snippet") or "")[:300]
-        ctx.append("%d. %s\n   %s\n   %s" % (i, s.get("title", ""), brief,
-                                             s.get("url", "")))
-    messages = [
-        {"role": "system", "content":
-            "你是简洁的搜索助手。根据给出的搜索结果回答用户，用中文，"
-            "总字数不超过 %d 字。只陈述结果中有依据的内容，不要编造；"
-            "不确定就直说。不要列举网址，结尾不要重复来源列表。" %
-            max(120, limits["answer_chars"] // 2)},
-        {"role": "user", "content":
-            "问题：%s\n\n搜索结果：\n%s" % (query, "\n".join(ctx))},
-    ]
+
+def ai_summarize(query, sources):
+    """非流式调用；返回 (answer, used_tokens, error)。"""
+    conf, limits, err = _ai_ready()
+    if err:
+        return None, 0, err
     payload = {
         "model": conf["model"],
-        "messages": messages,
+        "messages": _build_messages(query, sources, limits["answer_chars"]),
         "max_tokens": limits["max_tokens"],
         "temperature": 0.3,
         "stream": False,
@@ -316,22 +327,154 @@ def ai_summarize(query, sources):
     return answer, used, ""
 
 
+def ai_stream(query, sources):
+    """流式生成器，逐块产出 SSE 事件（data: {...}\n\n）。
+
+    兼容 OpenAI 的流式格式；同时容忍部分兼容服务直接返回整段 JSON。
+    事件类型：meta / delta / done / error。
+    """
+    conf, limits, err = _ai_ready()
+    if err:
+        yield _sse({"type": "error", "error": err})
+        return
+    payload = {
+        "model": conf["model"],
+        "messages": _build_messages(query, sources, limits["answer_chars"]),
+        "max_tokens": limits["max_tokens"],
+        "temperature": 0.3,
+        "stream": True,
+    }
+    yield _sse({"type": "meta", "model": conf["model"],
+                "usedSearch": bool(sources)})
+    text_parts = []
+    used = 0
+    try:
+        r = requests.post(
+            _chat_url(conf["url"]),
+            headers={"Authorization": "Bearer " + conf["key"],
+                     "Content-Type": "application/json",
+                     "Accept": "text/event-stream"},
+            data=json.dumps(payload).encode("utf-8"),
+            timeout=(15, AI_TIMEOUT), stream=True, verify=False)
+    except Exception as exc:
+        yield _sse({"type": "error", "error": "AI 请求失败：%s" % exc})
+        return
+    if r.status_code >= 400:
+        detail = ""
+        try:
+            detail = r.text[:300]
+        except Exception:
+            pass
+        yield _sse({"type": "error",
+                    "error": "AI 返回 HTTP %d：%s" % (r.status_code, detail)})
+        return
+
+    ctype = (r.headers.get("Content-Type") or "").lower()
+    try:
+        if "text/event-stream" not in ctype:
+            # 兼容不支持流式的服务：一次性读取完整 JSON
+            raw = r.content.decode("utf-8", "replace")
+            try:
+                data = json.loads(raw)
+                chunk = data["choices"][0]["message"]["content"]
+                used = int((data.get("usage") or {}).get("total_tokens") or 0)
+            except Exception:
+                chunk = raw
+            if chunk:
+                text_parts.append(chunk)
+                yield _sse({"type": "delta", "text": chunk})
+        else:
+            for line in r.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                if line.startswith(":"):
+                    continue            # SSE 注释/心跳
+                if line.startswith("data:"):
+                    line = line[5:].strip()
+                if line in ("[DONE]", "DONE"):
+                    break
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                # 兼容 OpenAI / 部分国产服务
+                choices = obj.get("choices") or []
+                delta = ""
+                if choices:
+                    c = choices[0]
+                    d = c.get("delta") or {}
+                    delta = d.get("content") or ""
+                    if not delta:
+                        delta = (c.get("message") or {}).get("content") or ""
+                        if not delta:
+                            delta = c.get("text") or ""
+                if not delta:
+                    delta = obj.get("delta") or ""
+                if delta:
+                    text_parts.append(delta)
+                    yield _sse({"type": "delta", "text": delta})
+                u = obj.get("usage")
+                if isinstance(u, dict) and u.get("total_tokens"):
+                    used = int(u["total_tokens"])
+    except Exception as exc:
+        yield _sse({"type": "error", "error": "流式读取中断：%s" % exc})
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
+
+    full = "".join(text_parts)
+    limits2 = _limits()
+    if len(full) > limits2["answer_chars"]:
+        full = full[:limits2["answer_chars"]]
+    if not used:
+        used = max(1, len(full) // 2)   # 服务未回报时按粗略估算计数
+    _bump_usage(used)
+    yield _sse({"type": "done", "text": full, "usage": ai_status()["usage"]})
+
+
+def _sse(obj):
+    return "data: %s\n\n" % json.dumps(obj, ensure_ascii=False)
+
+
 # ----------------------------- 对外入口 -----------------------------
+# AI 配置修改口令：与前端一致的常量。仅用于防止误改，不是强安全边界。
+CONFIG_PASSWORD = "Cpt1104122"
+
+
+def _check_password(value):
+    return str(value or "").strip() == CONFIG_PASSWORD
+
+
 def search_api(op="", method="POST"):
     """供 sources.serve_nova_api 调用的统一入口。
 
-    op:  ""(默认搜索) / "status" / "config"
+    op: ""/run       搜索（可选 AI 整理）
+        "ask"        AI 对话（body.use_search 决定是否先联网搜索）
+        "stream"     SSE 流式（body.mode = "ai" | "search"）
+        "status"     AI 状态与用量
+        "config"     读取/保存 AI 配置（保存需口令）
+        "verify"     校验配置口令
     """
-    from flask import request
+    from flask import Response, request
     from novacore.sources import _api_json
 
     if op == "status":
         return _api_json({"ok": True, **ai_status()})
 
+    if op == "verify":
+        body = request.get_json(force=True, silent=True) or {}
+        if _check_password(body.get("password")):
+            return _api_json({"ok": True})
+        return _api_json({"ok": False, "error": "口令错误"}, 403)
+
     if op == "config":
-        # 读取/保存 AI 配置（管理端本机写，平板只读状态）
         if method == "POST":
             body = request.get_json(force=True, silent=True) or {}
+            # 修改/设置配置必须提供口令
+            if not _check_password(body.get("password")):
+                return _api_json({"ok": False, "error": "口令错误，无法修改配置"}, 403)
             from novacore.configutil import CONFIG, save_config
             # save_config 会整体替换 CONFIG，必须在副本上改后一次性保存，
             # 否则会把其它配置键清空。
@@ -357,16 +500,63 @@ def search_api(op="", method="POST"):
         return _api_json({"ok": False, "error": "问题不能为空"}, 400)
     if len(query) > MAX_QUERY_LEN:
         query = query[:MAX_QUERY_LEN]
+
+    # ---- 流式 ----
+    if op == "stream":
+        mode = str(body.get("mode") or "search").lower()
+        use_search = (mode != "ai") or bool(body.get("use_search"))
+        sources, engine, errors = ([], "", [])
+        if use_search:
+            try:
+                limit = int(body.get("limit") or MAX_SOURCES)
+            except (TypeError, ValueError):
+                limit = MAX_SOURCES
+            limit = max(1, min(MAX_SOURCES, limit))
+            sources, engine, errors = search_web(query, limit)
+        if mode == "search":
+            # 搜索模式不使用 AI：直接给本地摘要 + 来源
+            answer = local_answer(query, sources)
+            limits = _limits()
+            if len(answer) > limits["answer_chars"]:
+                answer = answer[:limits["answer_chars"]] + "…"
+            meta = _sse({"type": "meta", "model": "", "usedSearch": True})
+            done = _sse({"type": "done", "text": answer, "sources": sources,
+                         "engine": engine, "usedAI": False,
+                         "searchErrors": errors,
+                         "usage": ai_status()["usage"]})
+            return Response(meta + done, mimetype="text/event-stream",
+                            headers={"Cache-Control": "no-store",
+                                     "X-Accel-Buffering": "no"})
+        gen = ai_stream(query, sources)
+        resp = Response(_with_sources(gen, sources, engine, errors, use_search),
+                        mimetype="text/event-stream")
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers["X-Accel-Buffering"] = "no"
+        resp.headers["Connection"] = "keep-alive"
+        return resp
+
+    # ---- 非流式 ----
     try:
         limit = int(body.get("limit") or MAX_SOURCES)
     except (TypeError, ValueError):
         limit = MAX_SOURCES
     limit = max(1, min(MAX_SOURCES, limit))
 
-    sources, engine, errors = search_web(query, limit)
-    answer, used, ai_error = ai_summarize(query, sources) if sources else (None, 0, "")
+    is_ai = op == "ask" or bool(body.get("use_ai"))
+    use_search = bool(body.get("use_search", True)) if is_ai else True
+    sources, engine, errors = ([], "", [])
+    if use_search:
+        sources, engine, errors = search_web(query, limit)
+    answer, used, ai_error = (None, 0, "")
+    if is_ai:
+        answer, used, ai_error = ai_summarize(query, sources)
     if not answer:
-        answer = local_answer(query, sources)
+        if sources:
+            answer = local_answer(query, sources)
+        elif ai_error:
+            answer = "AI 暂不可用：%s。请在设置中配置 AI，或切换到搜索模式。" % ai_error
+        else:
+            answer = "没有找到可用结果，请换个问法或稍后重试。"
 
     limits = _limits()
     if len(answer) > limits["answer_chars"]:
@@ -384,3 +574,11 @@ def search_api(op="", method="POST"):
         "searchedAt": int(time.time()),
         "usage": ai_status()["usage"],
     })
+
+
+def _with_sources(gen, sources, engine, errors, used_search):
+    """在流末尾补一帧 sources，便于前端一次性渲染来源列表。"""
+    for frame in gen:
+        yield frame
+    yield _sse({"type": "sources", "sources": sources, "engine": engine,
+                "usedSearch": used_search, "searchErrors": errors})

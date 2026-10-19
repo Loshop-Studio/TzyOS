@@ -428,6 +428,44 @@ def register_routes(app):
             return jsonify({"error": "task not found"}), 404
         return jsonify({"deleted": task_id})
 
+    # ---- 书源可用性验证 ----
+    @app.route("/novel/api/source-verify", methods=["GET", "POST"])
+    def _novel_source_verify():
+        """返回验证结果；?force=1 触发后台刷新（不阻塞）。"""
+        force = str(request.args.get("force") or "").lower() in ("1", "true", "yes")
+        try:
+            from .verify import get_results
+            return jsonify(get_results(force=force))
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    @app.route("/novel/api/source-usable")
+    def _novel_source_usable():
+        try:
+            from .verify import usable_keys
+            return jsonify({"ok": True, "keys": usable_keys()})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    @app.route("/novel/api/source-catalog")
+    def _novel_source_catalog():
+        """本地书源整理清单（含可用性状态）。"""
+        try:
+            from .discover import local_catalog
+            return jsonify(local_catalog())
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    @app.route("/novel/api/source-discover", methods=["GET", "POST"])
+    def _novel_source_discover():
+        """公开书源索引比对（网络不可达时返回 error，不阻塞）。"""
+        try:
+            from .discover import get_index
+            force = str(request.args.get("force") or "").lower() in ("1", "true")
+            return jsonify(get_index(force=force))
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
     @app.route("/novel/api/download-file")
     def _novel_download_file():
         path = (request.args.get("path") or "").strip()

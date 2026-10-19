@@ -41,3 +41,8 @@ apps_data/
 
 # 本地打包临时目录（build_all / 手动解包构建）
 build/
+
+# 书源验证/发现结果缓存（运行时生成）
+novelsrc/source_verify.json
+novelsrc/source_index.json
+novelsrc/*.json.tmp
