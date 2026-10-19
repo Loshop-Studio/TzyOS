@@ -2536,6 +2536,25 @@
     return appAssetUrlFromVfs(id, rel, key);
   }
 
+  // 校验落盘后的页面/resources 是否真的可访问（防止磁盘被部分清理后
+  // 一直返回 404 地址）。失败返回 false，由调用方回退 VFS 并触发重新落盘。
+  function probeAppDataUrl(id, page) {
+    page = String(page || "index.html").replace(/^\/+/, "");
+    return netResolve("apps-data/" + encodeURIComponent(id) + "/" +
+      page.split("/").map(encodeURIComponent).join("/")).then(function (url) {
+      if (!url) return null;
+      // 用轻量 HEAD 探测，避免把大文件读进内存
+      return fetch(url, { method: "HEAD", cache: "no-store" }).then(function (r) {
+        return r && r.ok ? url : null;
+      }, function () { return null; });
+    }, function () { return null; });
+  }
+
+  // 让电脑端重新落盘该应用（安装副本被破坏时自愈）
+  function repairAppData(id, entries) {
+    return syncAppToDisk(id, entries).then(function () { return true; }, function () { return false; });
+  }
+
   function appAssetUrlFromVfs(id, rel, key) {
     return vfs.get(APPS_ROOT + "/" + id + "/" + rel).then(function (g) {
       if (!g || !g.ok) throw new Error((g && g.error) || "资源不存在");
@@ -2545,6 +2564,59 @@
       var u = URL.createObjectURL(blob);
       pkgUrlCache[key] = u;
       return u;
+    });
+  }
+
+  // 从离线空间（VFS）把某应用的全部文件重新写回电脑磁盘。
+  // 用于落盘副本被缓存清理破坏后的自愈。
+  function rebuildAppDataFromVfs(id) {
+    var base = APPS_ROOT + "/" + id;
+    function walk(dir, out) {
+      return vfs.list(dir).then(function (r) {
+        if (!r || !r.ok) return out;
+        var chain = Promise.resolve();
+        (r.entries || []).forEach(function (en) {
+          var p = (dir === "" ? "" : dir) + "/" + en.name;
+          if (en.dir) {
+            chain = chain.then(function () { return walk(p, out); });
+          } else {
+            out.push({ path: p, rel: p.slice(base.length + 1) });
+          }
+        });
+        return chain.then(function () { return out; });
+      }, function () { return out; });
+    }
+    return walk(base, []).then(function (files) {
+      if (!files.length) return false;
+      var entries = files.map(function (f) {
+        return { rel: f.rel, path: f.path };
+      });
+      return netCall("sys/app-data-begin", { id: id }).then(function (r) {
+        if (!r || !r.ok) return false;
+        var i = 0;
+        function next() {
+          if (i >= entries.length) return true;
+          var en = entries[i++];
+          return vfs.get(en.path).then(function (g) {
+            if (!g || !g.ok) return next();
+            var blob = (g.text !== undefined && g.text !== null)
+              ? new Blob([g.text], { type: g.mime || mimeOf(en.rel) })
+              : b64ToBlob(g.data, g.mime || mimeOf(en.rel));
+            return blob.arrayBuffer().then(function (buf) {
+              return netFetch("sys/app-data-put?id=" + encodeURIComponent(id) +
+                "&p=" + encodeURIComponent(en.rel), {
+                method: "POST",
+                headers: { "Content-Type": "application/octet-stream" },
+                body: new Uint8Array(buf)
+              }).then(function (resp) {
+                if (!resp || !resp.ok) throw new Error("写入失败 " + en.rel);
+                return next();
+              });
+            });
+          }, function () { return next(); });
+        }
+        return Promise.resolve().then(next);
+      })["catch"](function () { return false; });
     });
   }
 
@@ -2597,6 +2669,19 @@
     catalog: appCatalog,
     download: appDownload,
     assetUrl: appAssetUrl,
+    // 探测落盘资源是否可用（HEAD），失败返回 null；应用可据此判断是否需要修复
+    probeAsset: probeAppDataUrl,
+    // 检查并修复落盘副本：从 VFS 重新上传全部文件到 apps_data/<id>/
+    ensureAsset: function (id, page) {
+      return probeAppDataUrl(id, page || "index.html").then(function (u) {
+        if (u) return { ok: true, url: u, repaired: false };
+        return rebuildAppDataFromVfs(id).then(function (ok) {
+          return probeAppDataUrl(id, page || "index.html").then(function (u2) {
+            return { ok: !!u2, url: u2, repaired: ok };
+          });
+        });
+      });
+    },
     cmpVer: cmpVer,
     isUser: function (id) { return !!(apps[id] && apps[id].def.user); }
   };
