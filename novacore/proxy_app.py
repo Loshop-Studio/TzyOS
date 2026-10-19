@@ -148,7 +148,10 @@ def create_proxy_app():
             resp.headers["Content-Length"] = str(len(body))
         resp.headers["Content-Type"] = "application/javascript; charset=utf-8"
         resp.headers["ETag"] = etag
-        if snapshot and cfg("cache_poison", True):
+        if snapshot:
+            # 快照是断劫持/离线唤起唯一的兜底：必须始终长缓存，不能跟随
+            # cache_poison 开关（该开关控制的是“平台静态资源投毒”）。否则
+            # 关闭投毒时快照变 no-cache，离线唤起直接失效。
             apply_long_cache(resp)
         else:
             # boot.js：每次使用前向服务器校验（未变 304，零正文流量）
