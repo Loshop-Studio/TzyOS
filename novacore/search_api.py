@@ -244,13 +244,53 @@ def ai_status():
     }
 
 
+def _normalize_ai_base(base):
+    """规范化用户填写的接口地址。
+
+    允许三种写法：
+      https://api.openai.com          -> 补 /v1
+      https://api.openai.com/v1       -> 原样
+      api.deepseek.com/v1             -> 补 https://
+    返回空串表示地址无效（不能直接拼 /v1/chat/completions 当成相对路径，
+    否则 requests 会把空主机当本机，报 WinError 10061）。
+    """
+    base = str(base or "").strip()
+    if not base:
+        return ""
+    if not re.match(r"^https?://", base, re.I):
+        base = "https://" + base.lstrip("/")
+    # 仅 "https://" 这种没有主机的情况视为无效
+    m = re.match(r"^https?://([^/]+)", base, re.I)
+    if not m or not m.group(1).strip():
+        return ""
+    return base.rstrip("/")
+
+
 def _chat_url(base):
-    base = base.rstrip("/")
+    base = _normalize_ai_base(base)
+    if not base:
+        return ""
     if base.endswith("/chat/completions"):
         return base
     if re.search(r"/v\d+$", base):
         return base + "/chat/completions"
     return base + "/v1/chat/completions"
+
+
+def _ai_error_hint(exc):
+    """把底层网络异常翻译成可读提示（避免直接抛 WinError 10061 这类文本）。"""
+    text = str(exc or "")
+    low = text.lower()
+    if "10061" in text or "connection refused" in low or "actively refused" in low:
+        return ("无法连接 AI 接口（连接被拒绝）。请检查设置中的接口地址是否完整"
+                "（例如 https://api.openai.com/v1），以及该地址是否可从本机访问。")
+    if "timed out" in low or "timeout" in low:
+        return "连接 AI 接口超时，请检查网络或代理后重试。"
+    if "getaddrinfo" in low or "name or service not known" in low or "nodename" in low:
+        return "AI 接口域名无法解析，请检查地址拼写或网络。"
+    if "certificate" in low or "ssl" in low:
+        return "AI 接口 TLS 证书校验失败，请确认地址正确。"
+    return "AI 请求失败：%s" % text[:200]
 
 
 def _build_messages(query, sources, answer_chars):
@@ -280,6 +320,9 @@ def _ai_ready():
     conf = _ai_config()
     if not (conf["enabled"] and conf["url"] and conf["key"] and conf["model"]):
         return conf, None, "AI 未启用或配置不完整"
+    if not _chat_url(conf["url"]):
+        return conf, None, ("AI 接口地址无效：请填入完整地址，"
+                            "例如 https://api.openai.com/v1")
     limits = _limits()
     _day, usage = _usage_snapshot()
     if usage["used"] >= limits["daily_calls"]:
@@ -307,7 +350,7 @@ def ai_summarize(query, sources):
             data=json.dumps(payload).encode("utf-8"),
             timeout=AI_TIMEOUT, verify=False)
     except Exception as exc:
-        return None, 0, "AI 请求失败：%s" % exc
+        return None, 0, _ai_error_hint(exc)
     if r.status_code >= 400:
         detail = ""
         try:
@@ -357,7 +400,7 @@ def ai_stream(query, sources):
             data=json.dumps(payload).encode("utf-8"),
             timeout=(15, AI_TIMEOUT), stream=True, verify=False)
     except Exception as exc:
-        yield _sse({"type": "error", "error": "AI 请求失败：%s" % exc})
+        yield _sse({"type": "error", "error": _ai_error_hint(exc)})
         return
     if r.status_code >= 400:
         detail = ""
@@ -495,6 +538,15 @@ def search_api(op="", method="POST"):
             # key 单独处理：空字符串表示清除
             if "search_ai_key" in body:
                 merged["search_ai_key"] = str(body.get("search_ai_key") or "").strip()
+            # 地址校验与规范化：避免把 "api.xxx" / "" / "http://" 这类无效值
+            # 存进去，之后请求会拼成相对 URL 连本机，报 WinError 10061。
+            if "search_ai_url" in body:
+                raw_url = str(body.get("search_ai_url") or "").strip()
+                if raw_url and not _chat_url(raw_url):
+                    return _api_json({"ok": False,
+                                      "error": "AI 接口地址无效，请填完整地址，"
+                                               "例如 https://api.openai.com/v1"}, 400)
+                merged["search_ai_url"] = _normalize_ai_base(raw_url)
             try:
                 save_config(merged)
             except Exception as exc:
