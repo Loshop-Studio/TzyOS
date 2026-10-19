@@ -144,16 +144,12 @@
         /* ---- 后台静默预取（必须在本 iframe 同源分区执行：Chrome 双键缓存按
               (顶级站, 当前帧站) 分区，父页面预取对本 iframe 无效）---- */
         var PF_KEY = "__nova_pfv__";
-        // 在线开关（os.js 写入 iframe 同源 localStorage）：关闭时不做任何网络预取，
-        // 避免后端不存在时把请求打到真实平台域名。
-        function onlineAllowed() {
-            try { return localStorage.getItem("nova2.online") === "true"; } catch (e) { return false; }
-        }
         function bridgePrefetch() {
             try {
-                // Prefetch is optional; skip it when the WebView is offline or
-                // the user has turned the online switch off.
-                if (navigator.onLine === false || !onlineAllowed()) return;
+                // 预取是为了「离线可用」把 OS 静态资源写入磁盘缓存，与在线开关
+                // 无关：开关关闭时反而更需要预取，否则断网后无缓存可用。
+                // 仅在浏览器明确离线时跳过（此时也取不到）。
+                if (navigator.onLine === false) return;
                 fetch("__filelist__.json", { cache: "no-cache" })
                     .then(function (r) { return r.json(); })
                     .then(function (man) {

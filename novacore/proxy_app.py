@@ -198,13 +198,25 @@ def create_proxy_app():
                 resp.headers["Content-Length"] = str(len(body))
             resp.headers["Content-Type"] = "text/html; charset=utf-8"
             resp.headers["ETag"] = etag
-            resp.headers["Cache-Control"] = "no-cache"
+            if is_top_index:
+                # 顶层入口：允许缓存但每次使用前校验（等价 no-cache），
+                # 并显式给一个短 max-age 兜底，确保断网时浏览器仍能使用
+                # 磁盘副本启动（纯 no-cache 在部分 WebView 会直接失败）。
+                resp.headers["Cache-Control"] = "no-cache, max-age=60"
+            else:
+                # 应用内部页面（lib/mojuan、lib/quickdraw、lib/phigros 等）：
+                # 必须长缓存，否则断网后打不开这些应用。
+                resp.headers["Cache-Control"] = "public, max-age=31536000"
         else:
             resp = send_file(fp, mimetype=ctype, conditional=False)
             # 看门狗重试的 index.html?t=..&r=.. 不投毒：它只是一次性绕缓存副本，
             # 若也缓存一年，会与干净键的正式副本长期并存、浪费分区空间。
             is_retry_url = is_top_index and bool(request.query_string)
-            if cfg("cache_poison", True) and not is_retry_url:
+            # 挂载点下的 OS 自身静态资源（os.js/css、apps/*.js、lib/**）是离线
+            # 可用的根基：必须始终长缓存，否则一旦断网，浏览器直接加载失败。
+            # cache_poison 只控制“平台(CDN)静态资源”是否缓存一年，不应影响我们
+            # 自己的运行时代码。
+            if not is_retry_url:
                 apply_long_cache(resp)
             else:
                 resp.headers["Cache-Control"] = "no-cache"
@@ -259,8 +271,12 @@ def create_proxy_app():
                 ctype = (mimetypes.guess_type(fp)[0] or
                          "application/octet-stream").split(";")[0].strip()
                 resp = send_file(fp, mimetype=ctype, conditional=True)
-                # 文件内容随安装/更新变化，用 no-cache + ETag 校验，避免旧页残留。
-                resp.headers["Cache-Control"] = "no-cache"
+                # 应用落库文件同样是离线可用的根基：长缓存（断网时可读磁盘
+                # 缓存）。no-cache 会导致离线打不开应用。这里不用
+                # apply_long_cache，因为它会删掉 ETag；保留 ETag 以便文件
+                # 更新后仍可条件校验（安装/升级会换 URL 或触发重拷）。
+                resp.headers["Cache-Control"] = \
+                    "public, max-age=31536000, immutable"
                 # IP 直连时平板跨域引用这些文件（iframe/图片/fetch），需放行。
                 resp.headers["Access-Control-Allow-Origin"] = "*"
                 return resp
