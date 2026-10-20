@@ -652,19 +652,14 @@
     libAppUrl: function (id, page) {
       page = String(page || "index.html").replace(/^\/+/, "");
       var sub = page.split("/").map(encodeURIComponent).join("/");
-      // 必须是绝对地址：应用入口脚本以 blob: URL 注入，相对路径会以
-      // blob 为基准解析成非法地址，表现为 iframe 空白（在线/离线都白）。
+      // 统一返回随系统分发的 lib/<id>/ 绝对地址。
+      // 必须是绝对地址：应用入口脚本以 blob: 注入，相对路径会以 blob 为
+      // 基准解析成非法地址。
+      // 刻意不再切到 apps-data：落库副本依赖安装同步与磁盘状态，多一条
+      // 失败路径（曾出现只在某一路径白屏）。lib/ 随系统发布、已长缓存，
+      // 在线离线都稳定；apps-data 仅保留给 .tzyp 应用资源的 assetUrl。
       var origin = location.origin + (MOUNT_PATH || "/");
-      var fallback = origin + "lib/" + encodeURIComponent(id) + "/" + sub;
-      if (!onlineEnabled()) {
-        // 在线关闭：不请求后端，直接用随系统的静态页面（可离线）。
-        return Promise.resolve(fallback);
-      }
-      return netCall("sys/app-data-ensure", { id: id }).then(function (r) {
-        if (!r || !r.ok) return fallback;
-        return netResolve("apps-data/" + encodeURIComponent(id) + "/" + sub)
-          .then(function (u) { return u || fallback; });
-      })["catch"](function () { return fallback; });
+      return Promise.resolve(origin + "lib/" + encodeURIComponent(id) + "/" + sub);
     },
     restoreCatalog: function () { return netCall("sys/restore-catalog", {}); },
     restorePackage: function (name) {

@@ -275,8 +275,11 @@ def create_proxy_app():
                 # 缓存）。no-cache 会导致离线打不开应用。这里不用
                 # apply_long_cache，因为它会删掉 ETag；保留 ETag 以便文件
                 # 更新后仍可条件校验（安装/升级会换 URL 或触发重拷）。
-                resp.headers["Cache-Control"] = \
-                    "public, max-age=31536000, immutable"
+                # 不使用 immutable：一旦某次返回过 404/半截内容，immutable
+                # 会让浏览器永久沿用坏副本，应用再也打不开。保留 ETag，
+                # 按 max-age 长缓存但仍可条件校验。
+                resp.headers["Cache-Control"] = "public, max-age=31536000"
+                resp.headers["X-Content-Type-Options"] = "nosniff"
                 # IP 直连时平板跨域引用这些文件（iframe/图片/fetch），需放行。
                 resp.headers["Access-Control-Allow-Origin"] = "*"
                 return resp
