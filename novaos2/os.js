@@ -482,13 +482,16 @@
   }
   // 异步拼接：确保探测完成后再给地址（用于 iframe.src 等必须在挂载后写死的场景）
   function netResolve(rel) {
-    // 在线关闭时不返回同源相对地址，避免 iframe 指向劫持域名打空请求；
-    // 调用方据此回退到本地 lib/ 路径。
-    if (!onlineEnabled()) return Promise.resolve(null);
     var r = normRel(rel);
-    if (NET.base) return Promise.resolve(NET.base + r);
+    // 返回绝对地址：调用方多为 iframe.src / 图片 / 下载链接，而应用入口脚本
+    // 运行在 blob: 环境里，相对路径会以 blob 为基准解析成非法地址。
+    function abs(base) {
+      return base ? (base + r) : (location.origin + (MOUNT_PATH || "/") + r);
+    }
+    if (!onlineEnabled()) return Promise.resolve(null);
+    if (NET.base) return Promise.resolve(abs(NET.base));
     return netProbe(false).then(function (p) {
-      return (p ? p.base : (NET.base || "")) + r;
+      return abs(p ? p.base : (NET.base || ""));
     });
   }
   // 带自动重探重试的动态基址 fetch：返回原生 Response，可直接 .json()/.text()/.blob()
@@ -648,19 +651,19 @@
     // 额外触发落库并优先用 apps_data 地址。
     libAppUrl: function (id, page) {
       page = String(page || "index.html").replace(/^\/+/, "");
-      var rel = "lib/" + encodeURIComponent(id) + "/" +
-        page.split("/").map(encodeURIComponent).join("/");
-      var fallback = rel;
+      var sub = page.split("/").map(encodeURIComponent).join("/");
+      // 必须是绝对地址：应用入口脚本以 blob: URL 注入，相对路径会以
+      // blob 为基准解析成非法地址，表现为 iframe 空白（在线/离线都白）。
+      var origin = location.origin + (MOUNT_PATH || "/");
+      var fallback = origin + "lib/" + encodeURIComponent(id) + "/" + sub;
       if (!onlineEnabled()) {
         // 在线关闭：不请求后端，直接用随系统的静态页面（可离线）。
         return Promise.resolve(fallback);
       }
       return netCall("sys/app-data-ensure", { id: id }).then(function (r) {
         if (!r || !r.ok) return fallback;
-        return netResolve("apps-data/" + encodeURIComponent(id) + "/" +
-          page.split("/").map(encodeURIComponent).join("/")).then(function (u) {
-          return u || fallback;
-        });
+        return netResolve("apps-data/" + encodeURIComponent(id) + "/" + sub)
+          .then(function (u) { return u || fallback; });
       })["catch"](function () { return fallback; });
     },
     restoreCatalog: function () { return netCall("sys/restore-catalog", {}); },
