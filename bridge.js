@@ -157,27 +157,41 @@
                         var done = "";
                         try { done = localStorage.getItem(PF_KEY) || ""; } catch (e) { }
                         if (done === String(man.version)) return;
-                        var i = 0, BATCH = 6;
+                        var i = 0, BATCH = 6, failed = [];
                         (function pump() {
                             if (navigator.onLine === false) return;
                             if (i >= man.files.length) {
-                                try { localStorage.setItem(PF_KEY, String(man.version)); } catch (e) { }
+                                // 只有全部成功才记录版本；否则保留旧版本，
+                                // 下次打开继续补抓缺失项（弱网中断可自愈）。
+                                if (!failed.length) {
+                                    try { localStorage.setItem(PF_KEY, String(man.version)); } catch (e) { }
+                                } else {
+                                    try { console.warn("[nova] prefetch incomplete:", failed.length, failed.slice(0, 5)); } catch (e) { }
+                                }
                                 return;
                             }
                             var part = man.files.slice(i, i + BATCH);
                             i += BATCH;
                             Promise.all(part.map(function (f) {
-                                return fetch(f, { cache: "default" })
-                                    .then(function () { }, function () { });
-                            })).then(function () { setTimeout(pump, 80); });
+                                // 用 reload 强制写入磁盘缓存并校验状态码，
+                                // 404/失败都记为未完成，不能静默当成功。
+                                // 用 default：已在缓存中则直接命中，缺失才回源；
+                                // reload 会强制回源，弱网下更易失败。
+                                return fetch(f, { cache: "default" }).then(function (r) {
+                                    if (!r || !r.ok) failed.push(f);
+                                }, function () { failed.push(f); });
+                            })).then(function () { setTimeout(pump, 60); });
                         })();
                     }).catch(function () { });
             } catch (e) { }
         }
+        // 预取尽早启动（1.2s）：离线缓存是产品根本，不能等太久才开始，
+        // 否则用户打开看一眼就关闭时缓存永远是空的。分批小包 + 轻间隔，
+        // 尽量避免与主界面首屏渲染争抢带宽。
         setTimeout(function () {
             var ric = window.requestIdleCallback || function (cb) { return setTimeout(cb, 1); };
-            ric(bridgePrefetch, { timeout: 10000 });
-        }, 3500);
+            ric(bridgePrefetch, { timeout: 5000 });
+        }, 1200);
 
         var hotOn = !!CFG.trigger_hotkey_enable;
         var wantKey = (CFG.trigger_hotkey_key || "").toLowerCase();

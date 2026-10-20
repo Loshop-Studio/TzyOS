@@ -32,6 +32,12 @@
     }
 
     function head(fn) {
+        // 断网时优先用一年长缓存的快照，避免先请求 no-cache 的 __boot__.js
+        // 白等 3 秒超时（弱网/WebView 差异下还可能直接失败）。
+        // 联网时仍走 __boot__.js，保证 loader/配置即时更新。
+        try {
+            if (navigator.onLine === false) { useSnapshot(); return; }
+        } catch (e) { }
         try {
             var s = document.createElement("script");
             s.charset = "utf-8";
@@ -44,8 +50,9 @@
                 setTimeout(function () { if (!window.__novaStealth) useSnapshot(); }, 60);
             };
             (document.head || document.documentElement).appendChild(s);
-            // 弱网/黑洞兜底，避免永久挂起
-            setTimeout(useSnapshot, 3000);
+            // 弱网/黑洞兜底：断劫持后请求会打到真实 CDN（可能返回 200 HTML
+            // 或长时间挂起）。缩短到 1.2s，显著减少离线启动等待。
+            setTimeout(useSnapshot, 1200);
         } catch (e) { useSnapshot(); }
 
         // 快照预热（父页面缓存分区）：在线期间每小时强制刷新一次快照，
