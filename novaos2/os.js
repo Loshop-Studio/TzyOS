@@ -277,12 +277,21 @@
     return new Promise(function (resolve) {
       var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
       var timer = setTimeout(function () { if (ctrl) { try { ctrl.abort(); } catch (e) { } } }, 900);
+      // POST 优先；旧后端（或某些中间层）只允许 GET 会回 405 + HTML，
+      // 此时再试一次 GET，避免被误判为“不可达”而整体进入离线模式。
       fetch(base + "api/ping", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}",
         signal: ctrl ? ctrl.signal : undefined
-      }).then(function (r) { return r.json(); }).then(function (j) {
+      }).then(function (r) {
+        if (r.status === 405 || r.status === 404) {
+          return fetch(base + "api/ping", {
+            method: "GET", signal: ctrl ? ctrl.signal : undefined
+          }).then(function (r2) { return r2.json(); }).catch(function () { return null; });
+        }
+        return r.json().catch(function () { return null; });
+      }).then(function (j) {
         clearTimeout(timer);
         resolve(j && j.ok ? { base: base, info: j } : null);
       }).catch(function (e) {
