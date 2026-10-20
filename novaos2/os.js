@@ -641,15 +641,27 @@
         try { if (ctrl) ctrl.abort(); } catch (e) { }
       };
     },
-    // 内置应用静态站落库：让电脑把 novaos2/lib/<id>/ 复制到 apps_data/<id>/，
-    // 返回可直接加载的 HTTP 地址（电脑不可达时返回 null，调用方回退 lib/ 相对路径）。
+    // 内置应用静态站地址。
+    // 关键：这些页面（lib/mojuan、lib/quickdraw、lib/phigros）本身随系统分发，
+    // 是纯静态资源，离线也应能打开。因此先返回同源相对地址（等同当前 OS 的
+    // 挂载路径，浏览器直接读磁盘缓存），只有在“在线模式开启且电脑可达”时才
+    // 额外触发落库并优先用 apps_data 地址。
     libAppUrl: function (id, page) {
       page = String(page || "index.html").replace(/^\/+/, "");
+      var rel = "lib/" + encodeURIComponent(id) + "/" +
+        page.split("/").map(encodeURIComponent).join("/");
+      var fallback = rel;
+      if (!onlineEnabled()) {
+        // 在线关闭：不请求后端，直接用随系统的静态页面（可离线）。
+        return Promise.resolve(fallback);
+      }
       return netCall("sys/app-data-ensure", { id: id }).then(function (r) {
-        if (!r || !r.ok) return null;
+        if (!r || !r.ok) return fallback;
         return netResolve("apps-data/" + encodeURIComponent(id) + "/" +
-          page.split("/").map(encodeURIComponent).join("/"));
-      })["catch"](function () { return null; });
+          page.split("/").map(encodeURIComponent).join("/")).then(function (u) {
+          return u || fallback;
+        });
+      })["catch"](function () { return fallback; });
     },
     restoreCatalog: function () { return netCall("sys/restore-catalog", {}); },
     restorePackage: function (name) {
