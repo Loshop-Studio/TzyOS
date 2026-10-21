@@ -498,6 +498,13 @@ def _run_export(task_id, site_key_, book_id, formats, title_hint=""):
 
         # 并发抓正文：按章节分片多线程拉取，失败章节重试 2 轮，
         # 最后做完整性校验（空正文/过短章节），仍失败才标记缺失。
+        def is_permanent(msg):
+            """VIP/登录/无权限类错误：重试也不会成功，必须快速放弃，
+            否则整本下载会被几十个必然失败的章节拖到几十分钟。"""
+            m = str(msg or "").lower()
+            return any(k in m for k in ("vip", "login", "requires", "not found",
+                                        "no permission", "订阅", "付费"))
+
         def fetch_one(idx_ch):
             idx, ch = idx_ch
             last = None
@@ -510,8 +517,10 @@ def _run_export(task_id, site_key_, book_id, formats, title_hint=""):
                     last = "正文过短(%d字)" % len(content)
                 except Exception as exc:
                     last = str(exc)[:120]
+                    if is_permanent(last):
+                        return idx, None, last
                 if attempt < 2:
-                    time.sleep(0.8 * (attempt + 1))
+                    time.sleep(0.5 * (attempt + 1))
             return idx, None, last
 
         workers = int(os.environ.get("NOVEL_WORKERS") or 4)

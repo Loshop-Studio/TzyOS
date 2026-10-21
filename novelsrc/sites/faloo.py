@@ -111,19 +111,16 @@ def _extract_chapters(root, volume):
 
 
 def _extract_main_chapters(main):
-    """对齐 Go extractFalooMainChapters：遇到 DivVip 后跳过后续（VIP）章节。"""
-    chapters = []
-    in_vip_section = False
-    for child in main.children:
-        if getattr(child, "name", None) is None:
-            continue
-        if "DivVip" in (child.get("class") or []):
-            in_vip_section = True
-        # cfg.General.FetchInaccessible 默认 false：VIP 段整段跳过
-        if in_vip_section:
-            continue
-        chapters.extend(_extract_chapters(child, "正文"))
-    return chapters
+    """提取正文章节。
+
+    注意：DivVip 只是“VIP 章节部分”的分区标题，其下面仍可能包含免费章节
+    （站点把上架后的免费/感言章也放在该分区里）。此前遇到 DivVip 就跳过
+    全部后续，导致目录被腰斩（实测 168 章只取到 68 章）。
+    现在遍历整个目录树，仅按链接本身判断是否为可下载章节。
+    """
+    # 直接在整个 #mulu 子树里按链接提取：站点目录存在多层容器
+    # （DivTable / C-Fo-Z-Zp-B1-Box1 等），只遍历直接子节点会漏章。
+    return _extract_chapters(main, "正文")
 
 
 def _parse_search_results(markup):
@@ -227,12 +224,24 @@ class FalooSite(Site):
             attr(_first_ancestor_class(doc, "img", "T-L-T-Img"), "src"))
 
         chapters = []
-        related = find_first(doc, "div", class_="C-Fo-Z-Zuoping")
-        if related is not None:
-            chapters.extend(_extract_chapters(related, "作品相关"))
+        # 目录分散在多处容器：
+        #   1) C-Fo-Z-Zuoping / C-Fo-Z-Zp-B1-Box1 —— 顶部“最新章节/作品相关”区
+        #   2) #mulu —— 完整正文目录
+        # 之前只取 #mulu，导致顶部区里的章节（如第50、53章）整段缺失。
+        for cls in ("C-Fo-Z-Zuoping", "C-Fo-Z-Zp-B1-Box1"):
+            box = find_first(doc, "div", class_=cls)
+            if box is not None:
+                chapters.extend(_extract_chapters(box, "作品相关"))
         main = find_by_id(doc, "mulu")
         if main is not None:
             chapters.extend(_extract_main_chapters(main))
+        # 按站点章节号排序，恢复正确顺序（顶部区与正文区会重复）
+        def _ord(c):
+            try:
+                return int(c.get("id") or 0)
+            except (TypeError, ValueError):
+                return 1 << 30
+        chapters.sort(key=_ord)
 
         return {
             "site": self.key, "id": book_id, "title": title, "author": author,

@@ -61,6 +61,49 @@ def node_find_first(node, name=None):
     return node.find(name)
 
 
+_CN_D = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+         "六": 6, "七": 7, "八": 8, "九": 9}
+_CN_U = {"十": 10, "百": 100, "千": 1000}
+
+
+def _chapter_no(title):
+    """从标题解析章号（支持阿拉伯与中文数字），失败返回 -1。"""
+    import re as _re
+    m = _re.search(r"第\s*([0-9]+|[零一二两三四五六七八九十百千]+)\s*[章节回]", title or "")
+    if not m:
+        return -1
+    t = m.group(1)
+    if t.isdigit():
+        return int(t)
+    total = section = number = 0
+    for ch in t:
+        if ch in _CN_D:
+            number = _CN_D[ch]
+        elif ch in _CN_U:
+            unit = _CN_U[ch]
+            section += (number or 1) * unit
+            number = 0
+        else:
+            return -1
+    return total + section + number
+
+
+def _order_by_chapter_no(chapters):
+    """按标题章号重排。
+
+    部分站点把“最新章节”链接插在目录页分页边界（实测 biquge5 把第315章
+    插在第100位），导致导出顺序错乱。章号可解析且基本有序时按章号排序。
+    """
+    if not chapters:
+        return chapters
+    nums = [_chapter_no(c.get("title")) for c in chapters]
+    if sum(1 for n in nums if n > 0) < max(2, int(len(chapters) * 0.8)):
+        return chapters
+    indexed = list(enumerate(chapters))
+    indexed.sort(key=lambda x: (nums[x[0]] if nums[x[0]] > 0 else 1 << 30, x[0]))
+    return [c for _, c in indexed]
+
+
 def meta_property(doc, prop):
     for meta in doc.find_all("meta"):
         if attr(meta, "property") == prop:
@@ -310,6 +353,17 @@ class BiqugePagedSite(Site):
                 pages[idx + 1] = future.result()
         return pages
 
+    def _looks_like_chapter(self, href):
+        """章节链接判定：<bookPath>/<chapterId>.html，排除 index_N.html 等分页。"""
+        path = (href or "").split("?")[0].split("#")[0]
+        last = path.rstrip("/").split("/")[-1]
+        if not last.endswith(".html"):
+            return False
+        base = last[:-5]
+        if not base or base.startswith("index_"):
+            return False
+        return base.replace("_", "").isdigit()
+
     def download_plan(self, book_id):
         book_id = (book_id or "").strip()
         pages = self._fetch_book_index_pages(book_id)
@@ -319,7 +373,21 @@ class BiqugePagedSite(Site):
         chapters = []
         for page in pages:
             pdoc = parse_html(page)
-            for a in find_all_pred(pdoc, "a", lambda n: has_ancestor_class(n, "book_list2")):
+            picked = find_all_pred(pdoc, "a", lambda n: has_ancestor_class(n, "book_list2"))
+            # 兜底：部分模板在同一页混用不同容器，book_list2 只能命中其中
+            # 一部分（实测每页漏 6~12 章）。用全页章节链接补齐缺失项。
+            seen_ids = set(self._chapter_id_from_href(attr(a, "href").strip())
+                           for a in picked)
+            for a in node_find_all(pdoc, "a"):
+                href = attr(a, "href").strip()
+                if not href or not self._looks_like_chapter(href):
+                    continue
+                cid = self._chapter_id_from_href(href)
+                if cid in seen_ids:
+                    continue
+                seen_ids.add(cid)
+                picked.append(a)
+            for a in picked:
                 href = attr(a, "href").strip()
                 if not href:
                     continue
@@ -329,7 +397,28 @@ class BiqugePagedSite(Site):
                     "url": absolutize(self.base_url, href),
                     "order": len(chapters) + 1,
                 })
-        chapters = apply_chapter_range(dedup_chapters(chapters))
+        chapters = dedup_chapters(chapters)
+        # 站点目录列表有时滞后于 meta 里的「最新章节」：若最新章不在目录中，
+        # 补一条，避免用户以为漏抓（章节内容仍可单独抓取）。
+        latest_url = meta_property(doc, "og:novel:latest_chapter_url")
+        latest_name = meta_property(doc, "og:novel:latest_chapter_name")
+        if latest_url:
+            latest_href = latest_url
+            try:
+                from urllib.parse import urlsplit
+                latest_href = urlsplit(latest_url).path or latest_url
+            except Exception:
+                pass
+            cid = self._chapter_id_from_href(latest_href)
+            if cid and cid not in set(c.get("id") for c in chapters):
+                chapters.append({
+                    "id": cid,
+                    "title": clean_text(latest_name) or ("第%s章" % cid),
+                    "url": absolutize(self.base_url, latest_href),
+                    "order": len(chapters) + 1,
+                })
+        chapters = _order_by_chapter_no(chapters)
+        chapters = apply_chapter_range(chapters)
         if self.require_chapters and not chapters:
             raise ValueError("no chapters found")
         return {
