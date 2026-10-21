@@ -10,6 +10,7 @@
 Loshop & Cpt
 """
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote, urlsplit
 
@@ -359,11 +360,20 @@ class BiqugePagedSite(Site):
         idx = 0
         while True:
             url = self._chapter_url(book_path, chapter_id, idx)
-            try:
-                markup = self._get(url)
-            except Exception:
+            # 单页失败重试：站点偶发超时/频控会让整章空白，重试能显著降低
+            # “下载完但内容缺失”的概率；首页失败则整章报错由上层再重试。
+            markup = None
+            last_err = None
+            for attempt in range(3):
+                try:
+                    markup = self._get(url)
+                    break
+                except Exception as exc:
+                    last_err = exc
+                    time.sleep(0.5 * (attempt + 1))
+            if markup is None:
                 if idx == 0:
-                    raise
+                    raise last_err or ValueError("chapter page fetch failed")
                 break
             markup = strip_nested_html(markup)
             doc = parse_html(markup)

@@ -10,19 +10,20 @@ import io
 import os
 import re
 import threading
+import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FutureTimeout
 
-from flask import jsonify, request, send_file
+from flask import Response, jsonify, request, send_file
 
 from .base import get_site, site_keys
 
 API_VERSION = "py-1.0.0"
 
 # 聚合搜索的总时限（秒）：超时即返回已到结果，避免个别站点不可达拖死整次请求
-SEARCH_DEADLINE = 25.0
+SEARCH_DEADLINE = 15.0
 
 _TITLE_WS = re.compile(r"[\s\u3000·・:：,，.。!！?？\-—_()（）\[\]【】]+")
 
@@ -60,14 +61,130 @@ def default_sources():
 # ---------------------------------------------------------------------------
 # 聚合搜索
 # ---------------------------------------------------------------------------
+# 单站搜索结果缓存：多数站点有频控（同一关键词短时间内重复请求返回空），
+# 缓存既能避免把自己打限流，也能让“翻页/重试/多端同时搜”秒回。
+_SEARCH_CACHE = {}
+_SEARCH_CACHE_TTL = 600          # 10 分钟
+_SEARCH_CACHE_MAX = 400
+_search_cache_lock = threading.Lock()
+
+
+def _cache_key(site_key_, keyword):
+    return (site_key_, norm_title(keyword) or keyword.strip().lower())
+
+
+def _search_cache_get(site_key_, keyword):
+    k = _cache_key(site_key_, keyword)
+    now = time.time()
+    with _search_cache_lock:
+        hit = _SEARCH_CACHE.get(k)
+        if hit and hit[0] > now:
+            return list(hit[1])
+        if hit:
+            _SEARCH_CACHE.pop(k, None)
+    return None
+
+
+def _search_cache_put(site_key_, keyword, items):
+    k = _cache_key(site_key_, keyword)
+    with _search_cache_lock:
+        if len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:
+            _SEARCH_CACHE.clear()
+        _SEARCH_CACHE[k] = (time.time() + _SEARCH_CACHE_TTL, list(items))
+
+
 def _search_one(site_key_, keyword, limit):
     site = get_site(site_key_)
     if site is None:
         return site_key_, []
+    cached = _search_cache_get(site_key_, keyword)
+    if cached is not None:
+        return site_key_, cached
     try:
-        return site_key_, site.search(keyword, limit=limit)
+        items = site.search(keyword, limit=limit)
     except Exception:
         return site_key_, []
+    # 只有拿到结果才缓存；空结果可能是被频控，不能缓存成“没这本书”
+    if items:
+        _search_cache_put(site_key_, keyword, items)
+    return site_key_, items
+
+
+def _group_rows(rows):
+    """按规范化标题归并，同书多源收进 variants，保持首次出现顺序。"""
+    groups = {}
+    order = []
+    for row in rows:
+        nk = norm_title(row.get("title"))
+        if not nk:
+            continue
+        if nk not in groups:
+            groups[nk] = []
+            order.append(nk)
+        groups[nk].append(row)
+    return groups, order
+
+
+def _build_results(groups, order):
+    """把归并结果整理成前端结构（含 variants 与汇总字段）。"""
+    results = []
+    for nk in order:
+        variants = groups[nk]
+        primary = variants[0]
+        author = ""
+        latest = ""
+        desc = ""
+        for v in variants:
+            if not author and v.get("author"):
+                author = v["author"]
+            if not latest and v.get("latest_chapter"):
+                latest = v["latest_chapter"]
+            if not desc and v.get("description"):
+                desc = v["description"]
+        results.append({
+            "title": primary.get("title", ""),
+            "author": author,
+            "description": desc,
+            "latest_chapter": latest,
+            "source_count": len(variants),
+            "primary": primary,
+            "variants": variants,
+        })
+    return results
+
+
+def _rank_results(results, keyword, overall_limit):
+    """按关键词匹配度排序并截断。"""
+    kw_norm = norm_title(keyword)
+
+    def score(item):
+        t = norm_title(item.get("title"))
+        a = norm_title(item.get("author"))
+        if not kw_norm:
+            return (0, 0, 0)
+        if t == kw_norm:
+            base = 100
+        elif t.startswith(kw_norm):
+            base = 80
+        elif kw_norm in t:
+            base = 60
+        elif a == kw_norm:
+            base = 40
+        elif kw_norm in a:
+            base = 30
+        else:
+            hit = sum(1 for ch in set(kw_norm) if ch in t)
+            base = int(20 * hit / max(1, len(set(kw_norm))))
+        return (base, item.get("source_count", 0), -len(item.get("title", "")))
+
+    if kw_norm:
+        results.sort(key=score, reverse=True)
+        results = [r for r in results if score(r)[0] >= 20]
+    else:
+        results.sort(key=lambda r: (-r.get("source_count", 0), len(r.get("title", ""))))
+    if overall_limit > 0:
+        results = results[:overall_limit]
+    return results
 
 
 def hybrid_search(keyword, keys, per_site_limit, overall_limit):
@@ -92,44 +209,109 @@ def hybrid_search(keyword, keys, per_site_limit, overall_limit):
         finally:
             pool.shutdown(wait=False)
 
-    # 按标题归并（同书多源 -> variants）
-    groups = {}
-    order = []
-    for row in rows:
-        nk = norm_title(row.get("title"))
-        if not nk:
-            continue
-        if nk not in groups:
-            groups[nk] = []
-            order.append(nk)
-        groups[nk].append(row)
-
-    results = []
-    for nk in order:
-        variants = groups[nk]
-        primary = variants[0]
-        author = ""
-        latest = ""
-        desc = ""
-        for v in variants:
-            if not author and v.get("author"):
-                author = v["author"]
-            if not latest and v.get("latest_chapter"):
-                latest = v["latest_chapter"]
-            if not desc and v.get("description"):
-                desc = v["description"]
-        results.append({
-            "title": primary.get("title", ""),
-            "author": author,
-            "description": desc,
-            "latest_chapter": latest,
-            "source_count": len(variants),
-            "primary": primary,
-            "variants": variants,
-        })
-    if overall_limit > 0:
-        results = results[:overall_limit]
+    groups, order = _group_rows(rows)
+    results = _rank_results(_build_results(groups, order), keyword, overall_limit)
+    # 为每个可下载源补充章节数（并发、限时），供前端“选择下载源”展示。
+    _enrich_variants(results)
     return results, sorted(set(hit_keys))
+
+
+def _enrich_variants(results, max_books=12, budget=6.0):
+    """给结果里的每个源补 chapter_count / latest_chapter。
+
+    只处理前 max_books 个结果，总耗时限 budget 秒，避免拖慢搜索。
+    """
+    targets = []
+    for item in results[:max_books]:
+        for v in item.get("variants") or []:
+            if v.get("chapter_count") is None:
+                targets.append(v)
+    if not targets:
+        return
+
+    def one(v):
+        try:
+            site = get_site(v.get("site"))
+            if site is None or not site.downloadable:
+                v["chapter_count"] = 0
+                return
+            plan = site.download_plan(v.get("book_id"))
+            chs = plan.get("chapters") or []
+            v["chapter_count"] = len(chs)
+            if chs and not v.get("latest_chapter"):
+                v["latest_chapter"] = chs[-1].get("title") or ""
+        except Exception:
+            v["chapter_count"] = -1
+
+    pool = ThreadPoolExecutor(max_workers=6)
+    deadline = time.time() + budget
+    try:
+        futs = [pool.submit(one, v) for v in targets]
+        for f in futs:
+            remain = deadline - time.time()
+            if remain <= 0:
+                break
+            try:
+                f.result(timeout=remain)
+            except Exception:
+                # 超时或失败：标记未知，不阻塞整体搜索
+                pass
+    except Exception:
+        pass
+    finally:
+        # wait=False 不等待卡住的线程；它们完成后会自行退出
+        pool.shutdown(wait=False)
+
+
+def stream_search(keyword, keys, per_site_limit, overall_limit):
+    """流式聚合搜索：每个站点返回时立即算一次快照并推送。
+
+    前端可先展示部分结果，不必等到最慢的站点（最长 SEARCH_DEADLINE）。
+    """
+    import json as _json
+    rows, hit_keys = [], []
+    seen_titles = set()
+
+    def frame(obj):
+        return "data: %s\n\n" % _json.dumps(obj, ensure_ascii=False)
+
+    if not keys:
+        yield frame({"type": "done", "total": 0})
+        return
+    pool = ThreadPoolExecutor(max_workers=min(8, max(1, len(keys))))
+    try:
+        futures = {pool.submit(_search_one, k, keyword, per_site_limit): k for k in keys}
+        try:
+            for fut in as_completed(futures, timeout=SEARCH_DEADLINE):
+                try:
+                    key, items = fut.result()
+                except Exception:
+                    continue
+                if not items:
+                    continue
+                hit_keys.append(key)
+                rows.extend(items)
+                groups, order = _group_rows(rows)
+                partial = _rank_results(_build_results(groups, order), keyword, overall_limit)
+                # 只推增量：新出现的标题（按规范化标题去重）
+                fresh = []
+                for r in partial:
+                    nk = norm_title(r.get("title"))
+                    if nk and nk not in seen_titles:
+                        seen_titles.add(nk)
+                        fresh.append(r)
+                yield frame({"type": "partial", "site": key,
+                             "items": fresh, "total": len(partial),
+                             "hitSites": sorted(set(hit_keys))})
+        except FutureTimeout:
+            pass
+    finally:
+        pool.shutdown(wait=False)
+    groups, order = _group_rows(rows)
+    final = _rank_results(_build_results(groups, order), keyword, overall_limit)
+    _enrich_variants(final)
+    yield frame({"type": "done", "items": final, "total": len(final),
+                 "hitSites": sorted(set(hit_keys))})
 
 
 def paginate(results, page, page_size):
@@ -190,6 +372,68 @@ def _safe_name(name):
     return name[:80] or "novel"
 
 
+_CH_TITLE_RE = re.compile(
+    r"^\s*(?:第\s*)?(\d+)\s*(?:章|节|回|话)?\s*[:：.、\-—]?\s*(.*)$")
+
+
+def normalize_chapter_title(title, index):
+    """把各种站点的章节标题统一成「第N章 标题」的形式。
+
+    很多站点的标题是「123」纯数字、「第123章」、「正文 第123章 xxx」
+    甚至空白。统一后阅读器和 TXT 目录可读性一致。
+    """
+    raw = re.sub(r"\s+", " ", str(title or "")).strip()
+    if not raw:
+        return "第%d章" % index
+    # 去掉常见前缀噪音
+    raw = re.sub(r"^(?:正文|章节目录|目录)[\s:：]*", "", raw).strip()
+    m = _CH_TITLE_RE.match(raw)
+    if m:
+        num = int(m.group(1))
+        rest = (m.group(2) or "").strip(" ：:.-、—")
+        return ("第%d章 %s" % (num, rest)).strip() if rest else "第%d章" % num
+    # 「第十章 / 第二十七章」：把中文数字转成阿拉伯数字并统一分隔符，
+    # 否则各站标题混用「第一章，」「第1章 」难以检索与排序。
+    m2 = re.match(r"^第([0-9一二三四五六七八九十百千零两]+)[章节回]\s*[，,、:：.。\-—]?\s*(.*)$", raw)
+    if m2:
+        num = _cn_to_int(m2.group(1))
+        rest = (m2.group(2) or "").strip(" ，,、:：.。-—")
+        if num > 0:
+            return ("第%d章 %s" % (num, rest)).strip() if rest else "第%d章" % num
+        return raw
+    return "第%d章 %s" % (index, raw)
+
+
+_CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+              "六": 6, "七": 7, "八": 8, "九": 9}
+_CN_UNITS = {"十": 10, "百": 100, "千": 1000}
+
+
+def _cn_to_int(text):
+    """中文数字 -> int（支持 1-9999）。非中文数字返回 -1。"""
+    text = str(text or "").strip()
+    if not text:
+        return -1
+    if text.isdigit():
+        try:
+            return int(text)
+        except ValueError:
+            return -1
+    total, section, number = 0, 0, 0
+    for ch in text:
+        if ch in _CN_DIGITS:
+            number = _CN_DIGITS[ch]
+        elif ch in _CN_UNITS:
+            unit = _CN_UNITS[ch]
+            if number == 0:
+                number = 1
+            section += number * unit
+            number = 0
+        else:
+            return -1
+    return total + section + number
+
+
 def _build_txt(book):
     out = io.StringIO()
     out.write(book.get("title") or "")
@@ -200,7 +444,8 @@ def _build_txt(book):
         out.write("来源：%s\n" % book["source_url"])
     out.write("\n")
     for i, ch in enumerate(book.get("chapters") or []):
-        out.write("\n%s\n\n" % (ch.get("title") or ("第 %d 章" % (i + 1))))
+        title = normalize_chapter_title(ch.get("title"), i + 1)
+        out.write("\n%s\n\n" % title)
         out.write((ch.get("content") or "") + "\n")
     return out.getvalue()
 
@@ -219,12 +464,13 @@ def _build_epub(book):
     spine = ["nav"]
     toc = []
     for i, ch in enumerate(chapters):
-        item = epub.EpubHtml(title=ch.get("title") or ("第 %d 章" % (i + 1)),
+        item = epub.EpubHtml(title=normalize_chapter_title(ch.get("title"), i + 1),
                              file_name="chap_%04d.xhtml" % i, lang="zh")
         body = "".join("<p>%s</p>" % _html.escape(line)
                        for line in (ch.get("content") or "").split("\n") if line.strip())
         item.content = "<h2>%s</h2>%s" % (
-            _html.escape(ch.get("title") or ""), body or "<p></p>")
+            _html.escape(normalize_chapter_title(ch.get("title"), i + 1)),
+            body or "<p></p>")
         eb.add_item(item)
         spine.append(item)
         toc.append(item)
@@ -250,15 +496,55 @@ def _run_export(task_id, site_key_, book_id, formats, title_hint=""):
         _update(task_id, title=book.get("title") or book.get("id") or book_id,
                 total_chapters=len(chapters), phase="抓取正文")
 
-        for i, ch in enumerate(chapters):
-            try:
-                loaded = site.fetch_chapter(book_id, ch)
-            except Exception:
-                loaded = dict(ch)
-            loaded["order"] = i + 1
-            chapters[i] = loaded
-            _update(task_id, completed_chapters=i + 1,
-                    current_chapter=loaded.get("title") or ch.get("title") or "")
+        # 并发抓正文：按章节分片多线程拉取，失败章节重试 2 轮，
+        # 最后做完整性校验（空正文/过短章节），仍失败才标记缺失。
+        def fetch_one(idx_ch):
+            idx, ch = idx_ch
+            last = None
+            for attempt in range(3):
+                try:
+                    loaded = site.fetch_chapter(book_id, ch)
+                    content = (loaded.get("content") or "").strip()
+                    if len(content) >= 30:
+                        return idx, loaded, None
+                    last = "正文过短(%d字)" % len(content)
+                except Exception as exc:
+                    last = str(exc)[:120]
+                if attempt < 2:
+                    time.sleep(0.8 * (attempt + 1))
+            return idx, None, last
+
+        workers = int(os.environ.get("NOVEL_WORKERS") or 4)
+        workers = max(1, min(8, workers))
+        done = 0
+        failed = []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(fetch_one, (i, ch)) for i, ch in enumerate(chapters)]
+            for fut in as_completed(futures):
+                try:
+                    idx, loaded, err = fut.result()
+                except Exception as exc:
+                    continue
+                done += 1
+                if loaded is not None:
+                    loaded["order"] = idx + 1
+                    loaded.setdefault("title", chapters[idx].get("title"))
+                    chapters[idx] = loaded
+                else:
+                    failed.append((idx, err))
+                    # 保留目录信息但标记失败，导出时写入占位说明
+                    chapters[idx] = dict(chapters[idx])
+                    chapters[idx]["content"] = chapters[idx].get("content") or ""
+                    chapters[idx]["failed"] = err or "抓取失败"
+                _update(task_id, completed_chapters=done,
+                        current_chapter=(loaded or {}).get("title")
+                        or chapters[idx].get("title") or "")
+        # 排序回目录顺序并标记缺失
+        chapters.sort(key=lambda c: c.get("order") or 0)
+        missing = [i for i, c in enumerate(chapters) if c.get("failed")]
+        if missing:
+            _append_msg(task_id, "有 %d 章内容缺失（已重试）：%s" % (
+                len(missing), ", ".join("第%d章" % (i + 1) for i in missing[:10])))
         book["chapters"] = chapters
 
         _update(task_id, phase="写入文件")
@@ -333,6 +619,25 @@ def register_routes(app):
         payload = paginate(results, page, page_size)
         payload["sites"] = hits
         return jsonify(payload)
+
+    @app.route("/novel/api/search-stream", methods=["POST"])
+    def _novel_search_stream():
+        """流式搜索（SSE）：结果边到边推，前端可先渲染。"""
+        body = request.get_json(silent=True) or {}
+        keyword = (body.get("keyword") or "").strip()
+        if not keyword:
+            return jsonify({"error": "keyword is required"}), 400
+        keys = [k for k in (body.get("sites") or []) if k]
+        if not keys:
+            keys = [s["key"] for s in default_sources()]
+        per_site = int(body.get("site_limit") or 8)
+        overall = int(body.get("limit") or 20)
+        gen = stream_search(keyword, keys, per_site, overall)
+        resp = Response(gen, mimetype="text/event-stream")
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers["X-Accel-Buffering"] = "no"
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
 
     @app.route("/novel/api/books/detail")
     def _novel_detail():

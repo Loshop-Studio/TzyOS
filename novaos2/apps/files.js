@@ -183,14 +183,14 @@
     batchBar.style.display = "none";
     var lblCount = OS.h("span", "nv-batch-count", "已选 0 项");
     var bBatchDl = OS.h("button", "nv-btn", "批量下载");
-    var bBatchSave = OS.h("button", "nv-btn", "批量存离线");
+    var bBatchCopy = OS.h("button", "nv-btn", "批量复制到");
     var bBatchZip = OS.h("button", "nv-btn", "压缩为zip");
     bBatchZip.title = "把勾选的文件/文件夹在本机压缩成 zip（离线可用）";
     var bBatchDel = OS.h("button", "nv-btn danger", "批量删除");
     var bBatchCancel = OS.h("button", "nv-btn ghost", "取消");
     batchBar.appendChild(lblCount);
     batchBar.appendChild(bBatchDl);
-    batchBar.appendChild(bBatchSave);
+    batchBar.appendChild(bBatchCopy);
     batchBar.appendChild(bBatchZip);
     batchBar.appendChild(bBatchDel);
     batchBar.appendChild(bBatchCancel);
@@ -620,11 +620,91 @@
         downloadEntry(entry, cb);
       });
     });
-    bBatchSave.addEventListener("click", function () {
-      batchOp("存离线", function (entry, cb) {
-        saveToVfs(entry, cb);
+    // 批量复制到：复用 pickCopyTarget（电脑/VFS/FTP/SMB 目录选择器），
+    // 目标已存在同名项时逐个询问是否覆盖（复用 OS.dlg.confirm）。
+    bBatchCopy.addEventListener("click", function () {
+      var names = Object.keys(state.selected);
+      if (!names.length) return;
+      var entries = names.map(function (n) {
+        for (var i = 0; i < state.entries.length; i++)
+          if (state.entries[i].name === n) return state.entries[i];
+        return null;
+      }).filter(Boolean);
+      if (!entries.length) return;
+      pickCopyTarget("复制 " + entries.length + " 项到…", entries[0]).then(function (target) {
+        if (!target) return;
+        var i = 0, done = 0, fail = 0, skipped = 0;
+        statusLine.textContent = "批量复制 0/" + entries.length + "…";
+        function step() {
+          if (i >= entries.length) {
+            OS.toast("批量复制完成：成功 " + done +
+              (skipped ? "，跳过 " + skipped : "") + (fail ? "，失败 " + fail : ""));
+            clearSelection(); refresh();
+            return;
+          }
+          var entry = entries[i++];
+          var src = joinPath(state.path, entry.name);
+          var dst = joinPath(target.path, entry.name);
+          copyIntoExisting(src, entry, dst, target, function (ok, skip) {
+            if (skip) skipped++; else if (ok) done++; else fail++;
+            statusLine.textContent = "批量复制 " + i + "/" + entries.length + "…";
+            step();
+          });
+        }
+        step();
       });
     });
+
+    // 复制单个条目（含目录递归）；目标已存在时先询问，返回 cb(ok:bool, skip:bool)
+    function copyIntoExisting(src, entry, dst, target, cb) {
+      var existsP;
+      if (target.key === "vfs") existsP = OS.vfs.get(dst).then(function (g) { return !!(g && g.ok); }, function () { return false; });
+      else if (target.key === "fs") existsP = OS.api.fs("get", { path: dst }).then(function (g) { return !!(g && g.ok); }, function () { return false; });
+      else existsP = copyTargetList(target.key, target.conn, parentPath(dst)).then(function (r) {
+        if (!r || !r.ok) return false;
+        return (r.entries || []).some(function (e) { return e.name === entry.name; });
+      }, function () { return false; });
+      existsP.then(function (exists) {
+        if (!exists) return doCopy();
+        OS.dlg.confirm("目标已存在「" + entry.name + "」，是否覆盖？", "文件冲突").then(function (yes) {
+          if (!yes) return cb(false, true);
+          doCopy();
+        });
+      });
+      function doCopy() {
+        copyTreeTo(src, dst, target, entry).then(function () { cb(true); },
+          function (e) {
+            OS.logerr("files", e, "复制失败 " + src + " -> " + dst);
+            cb(false);
+          });
+      }
+    }
+
+    // 跨源递归复制：源用 srcXxx（当前目录源），目标用 copyTargetApi（选定源）
+    function copyTreeTo(src, dst, target, entry) {
+      return srcGet(src).then(function (r) {
+        if (r && r.ok) {
+          var body = (r.text !== undefined && r.text !== null && r.content !== undefined)
+            ? { content: r.content }
+            : { data: r.data };
+          return copyTargetApi(target.key, target.conn, "put", dst, body);
+        }
+        // 目录：列出后递归
+        return srcList(src).then(function (dir) {
+          if (!dir || !dir.ok) throw new Error((dir && dir.error) || "读取目录失败");
+          return copyTargetApi(target.key, target.conn, "mkdir", dst).then(function (made) {
+            if (made && made.ok === false) throw new Error(made.error || "创建目录失败");
+            var chain = Promise.resolve();
+            (dir.entries || []).forEach(function (e) {
+              chain = chain.then(function () {
+                return copyTreeTo(joinPath(src, e.name), joinPath(dst, e.name), target, e);
+              });
+            });
+            return chain;
+          });
+        });
+      });
+    }
     bBatchZip.addEventListener("click", function () { zipEntries(Object.keys(state.selected)); });
 
     /* ========== 本地压缩 / 解压（纯前端，离线可用；Loshop & Cpt） ========== */
@@ -708,7 +788,15 @@
         return;
       }
       var defName = names.length === 1 ? names[0].replace(/\.[^.]+$/, "") + ".zip" : "压缩包.zip";
-      OS.dlg.prompt("压缩包文件名（zip 格式，含文件夹会递归打包）", defName, "压缩为 zip").then(function (fname) {
+      // 先选目标目录（复用目录选择器），再输文件名
+      pickCopyTarget("选择 zip 保存位置", { name: defName, dir: false }).then(function (target) {
+        if (!target) return;
+        return OS.dlg.prompt("压缩包文件名（zip 格式，含文件夹会递归打包）", defName, "压缩为 zip")
+          .then(function (fname) { return { target: target, fname: fname }; });
+      }).then(function (ctx) {
+        if (!ctx) return;
+        var target = ctx.target;
+        var fname = ctx.fname;
         if (fname === null) return;
         fname = (fname || "").trim().replace(/[\\/]/g, "");
         if (!fname) return;
@@ -762,9 +850,10 @@
             type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 }
           }, function (meta) { statusLine.textContent = "压缩中 " + meta.percent.toFixed(0) + "%"; });
         }).then(function (blob) {
-          statusLine.textContent = "正在写入 " + fname + "…";
+          var destPath = joinPath(target.path, fname);
+          statusLine.textContent = "正在写入 " + destPath + "…";
           return blobToB64(blob).then(function (b64) {
-            return srcPut(joinPath(state.path, fname), {
+            return copyTargetApi(target.key, target.conn, "put", destPath, {
               name: fname, mime: "application/zip", data: b64
             });
           });
@@ -881,6 +970,67 @@
         return parseTarItems(new Uint8Array(buf));
       });
     }
+    // ---- 目标源（电脑/VFS/FTP/SMB）版本的建目录与写入 ----
+    function ensureTargetDirs(target, absPath, items) {
+      // 收集所有需要的目录（目标根 + 每个条目的父目录）
+      var dirs = {};
+      var root = String(absPath || "").replace(/^\/+/, "");
+      var acc = "";
+      root.split("/").filter(Boolean).forEach(function (seg) {
+        acc = acc ? acc + "/" + seg : seg;
+        dirs[acc] = 1;
+      });
+      (items || []).forEach(function (it) {
+        var rel = safeRel(it.rel);
+        if (!rel) return;
+        var full = joinPath(root, rel);
+        if (it.dir) { dirs[full] = 1; return; }
+        var parent = parentPath(full);
+        if (parent) dirs[parent] = 1;
+      });
+      var list = Object.keys(dirs).sort(function (a, b) { return a.length - b.length; });
+      var chain = Promise.resolve();
+      list.forEach(function (d) {
+        chain = chain.then(function () {
+          return copyTargetApi(target.key, target.conn, "mkdir", d)
+            ["catch"](function () { return { ok: false }; });
+        });
+      });
+      return chain;
+    }
+
+    function writeArcItemsTo(target, base, items, onProgress) {
+      var okN = 0, failN = 0;
+      var chain = Promise.resolve();
+      var root = String(base || "").replace(/^\/+/, "");
+      items.forEach(function (it) {
+        chain = chain.then(function () {
+          var rel = safeRel(it.rel);
+          if (!rel) { failN++; onProgress(okN, failN); return; }
+          var abs = joinPath(root, rel);
+          if (it.dir) {
+            return copyTargetApi(target.key, target.conn, "mkdir", abs).then(function () {
+              okN++; onProgress(okN, failN);
+            }, function () { failN++; onProgress(okN, failN); });
+          }
+          return blobToB64(it.blob).then(function (b64) {
+            return copyTargetApi(target.key, target.conn, "put", abs, {
+              name: rel.split("/").pop(),
+              mime: it.blob.type || "application/octet-stream", data: b64
+            });
+          }).then(function (r) {
+            if (r && r.ok === false) throw new Error(r.error || "写入失败");
+            okN++; onProgress(okN, failN);
+          }, function (e) {
+            failN++;
+            OS.log("files", "解压条目写入失败 " + abs + "：" + (e && e.message), "warn");
+            onProgress(okN, failN);
+          });
+        });
+      });
+      return chain.then(function () { return { ok: okN, fail: failN }; });
+    }
+
     function writeArcItems(base, items, onProgress) {
       var okN = 0, failN = 0;
       var chain = Promise.resolve();
@@ -923,13 +1073,19 @@
       }
       var arcPath = joinPath(state.path, entry.name);
       var outName = arcBaseName(entry.name) || ("解压_" + Date.now());
-      OS.dlg.confirm(
-        "解压「" + entry.name + "」到当前目录下的文件夹「" + outName + "」？\n" +
-        "支持格式：zip / tar / tar.gz / gz，全程在本机完成。", "解压归档"
-      ).then(function (yes) {
-        if (!yes) return;
+      // 选择解压到哪个目录（复用目录选择器），再确认
+      pickCopyTarget("选择解压到…", entry).then(function (target) {
+        if (!target) return null;
+        return OS.dlg.confirm(
+          "解压「" + entry.name + "」到 [" + target.key.toUpperCase() + "] " +
+          (target.path ? "/" + target.path : "/") + "/" + outName + "？\n" +
+          "支持格式：zip / tar / tar.gz / gz，全程在本机完成。", "解压归档"
+        ).then(function (yes) { return yes ? target : null; });
+      }).then(function (target) {
+        if (!target) return;
         var t0 = Date.now();
-        OS.log("files", "解压开始：[" + state.source + "] " + arcPath + " 类型=" + kind);
+        OS.log("files", "解压开始：[" + state.source + "] " + arcPath +
+          " 类型=" + kind + " → [" + target.key + "] " + target.path);
         statusLine.textContent = "正在读取压缩包…";
         var total = 0;
         getAsBlob(arcPath, entry.name).then(function (blob) {
@@ -940,10 +1096,11 @@
           var bad = 0;
           items.forEach(function (it) { if (!safeRel(it.rel) && !it.dir) bad++; });
           if (bad) OS.log("files", "归档内含 " + bad + " 个非法路径条目（已跳过）：" + arcPath, "warn");
-          var targetBase = joinPath(state.path, outName);
+          var targetBase = joinPath(target.path, outName);
           statusLine.textContent = "解压写入 0/" + total + "…";
-          return ensureDirs(targetBase).then(function () {
-            return writeArcItems(targetBase, items, function (ok, fail) {
+          // 目标源可能是电脑/VFS/FTP/SMB：用 copyTargetApi 写入
+          return ensureTargetDirs(target, targetBase, items).then(function () {
+            return writeArcItemsTo(target, targetBase, items, function (ok, fail) {
               statusLine.textContent = "解压写入 " + (ok + fail) + "/" + total +
                 (fail ? "（" + fail + " 失败）" : "");
             });

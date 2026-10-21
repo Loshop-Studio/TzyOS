@@ -29,6 +29,9 @@ SEARCH_PLAN = (
     ("articlename", 17),
 )
 
+SEARCH_RETRIES = 2
+SEARCH_BACKOFF = 0.8
+
 CONTENT_NOISE = (
     "（本章未完，请点击下一页继续阅读）",
     "(本章未完，请点击下一页继续阅读)",
@@ -130,20 +133,29 @@ class Biquge345Site(Site):
 
     # ---- 搜索 ----
     def search(self, keyword, limit=0):
+        """书名搜索。
+
+        站点有频控：短时间重复请求会返回“结构合法但 0 条”的空结果页。
+        因此这里只做少量必要请求，失败即快速返回，交给聚合层重试/换源，
+        避免单站把整次聚合搜索拖到几十秒。
+        """
         keyword = (keyword or "").strip()
         if not keyword:
             return []
-        results = []
-        seen = set()
-        last_err = None
-        for search_type, delay in SEARCH_PLAN:
-            if delay > 0:
-                time.sleep(delay)
-            try:
-                items = self._search_by_type(search_type, keyword)
-            except Exception as exc:
-                last_err = exc
-                continue
+        results, seen, last_err = [], set(), None
+        # 先书名，再作者；每类最多 2 次（第 2 次带退避）
+        for search_type in ("articlename", "author"):
+            items = []
+            for attempt in range(2):
+                try:
+                    items = self._search_by_type(search_type, keyword)
+                except Exception as exc:
+                    last_err = exc
+                    items = []
+                if items:
+                    break
+                if attempt == 0:
+                    time.sleep(0.6)
             for item in items:
                 book_id = item.get("book_id")
                 if not book_id or book_id in seen:
