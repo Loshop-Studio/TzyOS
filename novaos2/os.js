@@ -846,8 +846,323 @@
       case "emit":
         emit(String(args.evt || ""), args.data); return { ok: true };
 
+      /* ---------- 维护命令组（终端 / 电脑 exec 共用） ----------
+       * 目标：把“清理缓存、重置应用、强制刷新”这类需要连点设置在多个
+       * 页面里找的动作，收敛成一串可复现的原子命令。
+       * 每条都只做一件事并回传做了什么，便于终端里逐条核对。 */
+      case "cache": {
+        var cacheKeys = function () {
+          var out = [];
+          for (var ci = 0; ci < localStorage.length; ci++) out.push(localStorage.key(ci));
+          return out.sort();
+        };
+        if (op === "keys" || !op) {
+          var all = cacheKeys();
+          var pref = String(args.prefix || "");
+          var keys = pref ? all.filter(function (k) { return k.indexOf(pref) === 0; }) : all;
+          return { count: keys.length, keys: keys, all: all.length };
+        }
+        if (op === "get") {
+          var gk = String(args.key || "");
+          var raw = localStorage.getItem(gk);
+          var size = raw === null ? 0 : raw.length;
+          return { key: gk, exists: raw !== null, bytes: size, value: raw };
+        }
+        if (op === "del") {
+          var dk = String(args.key || "");
+          if (!dk) return { error: "缺少 key" };
+          var had = localStorage.getItem(dk) !== null;
+          localStorage.removeItem(dk);
+          return { ok: true, key: dk, existed: had };
+        }
+        if (op === "purge") {
+          // 只删指定前缀，默认删 OS 自己的 nova2.*；不碰宿主页面/其它域键。
+          // 缺省（undefined/null）才用 nova2.；显式传空串视为非法，
+          // 不能悄悄回退成 nova2. —— 调用方以为在“清全部”，结果删了 OS 设置。
+          var pfx = (args.prefix === undefined || args.prefix === null)
+            ? "nova2." : String(args.prefix);
+          if (!pfx) return { error: "prefix 不能为空（清全部请显式指定前缀）" };
+          var victims = cacheKeys().filter(function (k) { return k.indexOf(pfx) === 0; });
+          if (args.dry === true)
+            return { ok: true, dry: true, prefix: pfx, wouldRemove: victims.length, keys: victims };
+          victims.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) { } });
+          return { ok: true, prefix: pfx, removed: victims.length, keys: victims };
+        }
+        if (op === "idb") {
+          // 列出 IndexedDB 库名与对象仓（离线空间 nova2、墨卷 NovelReader 等）
+          if (typeof indexedDB === "undefined") return { error: "不支持 IndexedDB" };
+          var idb = indexedDB;
+          return new Promise(function (resolve) {
+            var rq;
+            try { rq = idb.databases ? idb.databases() : null; } catch (e) { rq = null; }
+            if (!rq) { resolve({ note: "浏览器不支持 databases() 枚举", keys: [] }); return; }
+            rq.onsuccess = function () {
+              resolve({ databases: (rq.result || []).map(function (d) {
+                return { name: d.name, version: d.version };
+              }) });
+            };
+            rq.onerror = function () { resolve({ error: String(rq.error) }); };
+          });
+        }
+        if (op === "idb-drop") {
+          // 删除整库（应用数据/离线空间）；默认拒绝删 OS 自己的 nova2，
+          // 必须显式 force:true —— 那是用户文件，不是“缓存”。
+          var dbName = String(args.name || "");
+          if (!dbName) return { error: "缺少 name" };
+          if (dbName === IDB_DB && args.force !== true)
+            return { error: "nova2 是离线空间（用户文件），如确要删除请加 force:true" };
+          return new Promise(function (resolve) {
+            var rq = indexedDB.deleteDatabase(dbName);
+            rq.onsuccess = function () { resolve({ ok: true, dropped: dbName }); };
+            rq.onerror = function () { resolve({ error: String(rq.error) }); };
+            rq.onblocked = function () { resolve({ ok: false, error: "被占用，请先关闭相关应用再重试", db: dbName }); };
+          });
+        }
+        if (op === "sys") {
+          // 系统级缓存清理：Service Worker 注册 + CacheStorage（若有）
+          var done = { sw: 0, caches: [] };
+          var jobs = [];
+          if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+            jobs.push(navigator.serviceWorker.getRegistrations().then(function (regs) {
+              done.sw = regs.length;
+              return Promise.all(regs.map(function (r) { return r.unregister(); }));
+            })["catch"](function () { }));
+          }
+          if (typeof caches !== "undefined" && caches.keys) {
+            jobs.push(caches.keys().then(function (names) {
+              done.caches = names;
+              if (args.dry === true) return null;
+              return Promise.all(names.map(function (n) { return caches["delete"](n); }));
+            })["catch"](function () { }));
+          }
+          return Promise.all(jobs).then(function () { return done; });
+        }
+        return { error: "cache 未知 op：" + op + "（keys/get/del/purge/idb/idb-drop/sys）" };
+      }
+
+      case "appreset": {
+        // 重置单个/全部应用：关窗 + 卸根节点 + 清 blob 网址 + 重建
+        // （builtin 重建同一份代码；user 应用从离线空间重新加载注册表项）
+        if (op === "list") {
+          return { running: runningList(), apps: appList().map(function (a) {
+            return { id: a.id, name: a.name, builtin: a.builtin, version: a.version };
+          }) };
+        }
+        if (op === "asset") {
+          // 重新把离线空间里的应用文件同步到电脑 apps_data/<id>/（落盘副本自愈）
+          var aid = String(args.id || "");
+          if (!aid) return { error: "缺少 id" };
+          return rebuildAppDataFromVfs(aid).then(function (ok) {
+            return { ok: ok, id: aid, action: ok ? "已从离线空间重写电脑端副本" : "离线空间无该应用文件或无电脑端" };
+          });
+        }
+        var targets = [];
+        if (args.id) targets = [String(args.id)];
+        else targets = runningList();
+        // 默认跳过终端自己：重建自己会把正在输出结果的窗口关掉，
+        // 用户看到的是“点了按钮结果界面没了”。需要时用 self:true 强制。
+        var selfId = "devterm";
+        if (args.self !== true) {
+          targets = targets.filter(function (id) { return id !== selfId; });
+        }
+        if (!targets.length) return { ok: true, reset: [],
+          note: args.id ? "应用未在运行" : "没有需要重建的应用（终端自身已跳过）" };
+        var report = [];
+        targets.forEach(function (rid) {
+          var rec = apps[rid];
+          if (!rec) { report.push({ id: rid, error: "未注册" }); return; }
+          // 上面是 var（函数作用域），异步回调里必须用局部副本，
+          // 否则闭包拿到的是循环最后一个 rec，失败回退会恢复错的应用。
+          var savedDef = rec.def;
+          var isUser = !!savedDef.user;
+          var meta = isUser
+            ? appsRegGet().filter(function (m) { return m.id === rid; })[0] : null;
+          try {
+            if (rec.win) rec.win.close();
+          } catch (e) { }
+          try {
+            if (rec.root) rec.root.dispatchEvent(new Event("nv-destroy"));
+          } catch (e) { }
+          try {
+            if (rec.root && rec.root.parentNode) rec.root.parentNode.removeChild(rec.root);
+          } catch (e) { }
+          clearPkgUrls(rid);
+          delete apps[rid];
+          appOrder = appOrder.filter(function (x) { return x !== rid; });
+          report.push({ id: rid, builtin: !isUser, rebuilt: isUser ? "loading" : "restored" });
+          // 内置应用没有离线空间副本，重建 = 把原定义放回注册表（保留 desktop/
+          // builtin 等标记）。此前直接 delete 不恢复，会把内置应用从桌面和
+          // 应用清单里永久抹掉，只能刷新页面才能回来。
+          if (!isUser) {
+            var again = { def: savedDef, root: null, inited: false, win: null,
+              healthMisses: 0, healthPending: false, healthCrashed: false, lastArg: null };
+            apps[rid] = again;
+            if (appOrder.indexOf(rid) < 0) appOrder.push(rid);
+            if (desktopReady) renderDesktop();
+            if (args.open === true) { try { openApp(rid); } catch (e) { } }
+            return;
+          }
+          var boot = meta ? loadInstalledApp(meta) : Promise.resolve(true);
+          boot.then(function () {
+            if (args.open === true) { try { openApp(rid); } catch (e) { } }
+          }, function (e) {
+            nvErr("app", e, "appreset " + rid + " 重载失败");
+            // 重载失败时必须把占位记录放回去：否则该应用从 apps 消失，
+            // 桌面图标和续期重试都会跟着丢，只能重装才能恢复。
+            if (!apps[rid]) {
+              apps[rid] = { def: savedDef, root: null, inited: false, win: null,
+                healthMisses: 0, healthPending: false, healthCrashed: false, lastArg: null };
+              if (appOrder.indexOf(rid) < 0) appOrder.push(rid);
+              if (desktopReady) renderDesktop();
+            }
+          });
+        });
+        return { ok: true, reset: report };
+      }
+
+      case "netreset": {
+        // 清掉所有“后端地址”记忆，重新探测电脑服务（换网段/IP 后必备）
+        Store.remove(BASE_KEY);
+        Store.remove(PREFERRED_BASE_KEY);
+        try { localStorage.removeItem("nova2.frameBase"); } catch (e) { }
+        NET.base = "";
+        NET.info = null;
+        NET.probed = false;
+        NET.online = false;
+        NET.generation++;
+        NET.probing = null;
+        NET.nextProbeAt = 0;
+        netChanged();
+        return Promise.resolve(netProbe(true)).then(function (r) {
+          return { ok: !!(r && r.base !== undefined), base: NET.base || "", online: NET.online,
+            info: NET.info, cleared: [BASE_KEY, PREFERRED_BASE_KEY, "nova2.frameBase"] };
+        });
+      }
+
+      case "sysreset": {
+        // 比 reload -all 更彻底：额外清断点/地址记忆；默认保留软件与个人文件。
+        // keep=apps,vfs,pin,ui 指定要保留的组；wipe:true 才连注册表一起清。
+        // 默认保留 ui：壁纸/排版是用户能直接看见的设置，重置系统不该顺手抹掉。
+        var keep = String(args.keep || "apps,vfs,pin,ui");
+        var keepHas = function (n) { return keep.split(",").indexOf(n) >= 0; };
+        var closed = [];
+        appOrder.slice().forEach(function (id) {
+          var rec = apps[id];
+          if (!rec) return;
+          try { if (rec.win) rec.win.close(); } catch (e) { }
+          try { if (rec.root) rec.root.dispatchEvent(new Event("nv-destroy")); } catch (e) { }
+          try { if (rec.root && rec.root.parentNode) rec.root.parentNode.removeChild(rec.root); } catch (e) { }
+          clearPkgUrls(id);
+          closed.push(id);
+        });
+        var wiped = [];
+        if (args.wipe === true && !keepHas("apps")) {
+          Store.remove(APPS_KEY);
+          Store.remove("nova2.appdata");
+          Store.remove("nova2.preinstall.done");
+          wiped.push(APPS_KEY, "nova2.appdata", "nova2.preinstall.done");
+        }
+        if (!keepHas("ui")) { Store.remove(UI_KEY); wiped.push(UI_KEY); }
+        if (!keepHas("pin")) Store.remove(PIN_KEY);
+        [BASE_KEY, PREFERRED_BASE_KEY, DEV_KEY, DEBUG_KEY,
+          "nova2.lock", "nova2.net", "nova2.settings"].forEach(function (k) {
+          Store.remove(k); wiped.push(k);
+        });
+        try { localStorage.removeItem("nova2.frameBase"); } catch (e) { }
+        apps = {}; appOrder = []; activeId = null;
+        // 必须真的重载：apps 清空后当前会话就是一张空桌面，内置应用要等
+        // 页面重新加载时才会由 nova.html 的脚本重新注册。之前只返回
+        // willReload 标记却没执行，用户会停在“什么都没有”的桌面上。
+        // now:false 用于“只清配置、暂不刷新”（例如组合其它命令前）。
+        if (args.now === false) {
+          return { ok: true, closed: closed, wiped: wiped, keep: keep,
+            reloading: false, willReload: true,
+            note: "配置已清；未刷新页面，请自行 reload 或重开 OS" };
+        }
+        setTimeout(function () {
+          var url = location.href.split("#")[0].split("?")[0] + "?_rs=" + Date.now();
+          try { location.replace(url); } catch (e) { location.href = url; }
+        }, 350);
+        return { ok: true, closed: closed, wiped: wiped, keep: keep,
+          reloading: true, willReload: true };
+      }
+
+      case "forcerefresh": {
+        // 强制刷新 OS 页面：两段式
+        //   1) 平板上让电脑端刷新 ?v=（POST sys/update）
+        //   2) 立即 reload（带时间戳绕 HTTP 缓存）
+        // args.hard 为 true 时，先用 cache:reload 让浏览器跳过内存缓存。
+        var steps = [];
+        var bump = args.bump === false ? Promise.resolve(null) : netCall("sys/update", {})
+          .then(function (r) { steps.push({ step: "bump", ok: !!(r && r.ok), files: r && r.changed }); return r; },
+                function (e) { steps.push({ step: "bump", ok: false, error: String(e && e.message || e) }); });
+        return bump.then(function () {
+          if (args.now === false) return { ok: true, steps: steps, note: "未刷新页面，仅刷新版本号" };
+          var url = location.href.split("#")[0].split("?")[0] + "?_r=" + Date.now();
+          setTimeout(function () {
+            try { location.replace(url); } catch (e) { location.href = url; }
+          }, 300);
+          return { ok: true, steps: steps, reloading: true, url: url };
+        });
+      }
+
+      case "dump": {
+        // 一次性导出修复用的快照：系统信息 + 存储键 + 已装应用 + 后端状态
+        return Promise.resolve(
+          navigator.storage && navigator.storage.estimate
+            ? navigator.storage.estimate() : null
+        ).then(function (st) {
+          var keys = [];
+          for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            var v = localStorage.getItem(k);
+            keys.push({ key: k, bytes: v ? v.length : 0 });
+          }
+          keys.sort(function (a, b) { return b.bytes - a.bytes; });
+          return {
+            ua: navigator.userAgent,
+            url: location.href,
+            net: { base: NET.base, online: NET.online, probed: NET.probed, info: NET.info },
+            apps: appList(), running: runningList(),
+            installed: appsRegGet().map(function (m) { return m.id + "@" + m.version; }),
+            storage: st,
+            localStorage: { count: keys.length, keys: keys },
+            dev: devState()
+          };
+        });
+      }
+
+      case "hostpage": {
+        // 宿主（被劫持的平台页面）侧操作。bridge/loader 与 OS 同源但
+        // OS 在闭合 Shadow DOM 的 iframe 里，只能通过 postMessage 请求：
+        //   freeze / thaw  冻结/恢复宿主页面滚动与动画（省电、防误触）
+        //   reload         让 loader 重建整个 OS iframe（顶层自愈）
+        //   hide / show    主动隐藏/显示 OS
+        var act = String(args.act || args.op || "");
+        var allowed = { freeze: 1, thaw: 1, reload: 1, hide: 1, show: 1 };
+        if (!allowed[act]) return { error: "hostpage 未知 act：" + act + "（freeze/thaw/reload/hide/show）" };
+        // loader 只认 nva-* 且带握手 token 的消息（见 loader.js message 分支），
+        // 这里沿用同一套协议，避免宿主页面里其它脚本伪造维护指令。
+        // token 由 bridge 握手时写入 window.__NVA_TOKEN__。
+        var tok = "";
+        try { tok = String(window.__NVA_TOKEN__ || ""); } catch (e) { tok = ""; }
+        var sent = false;
+        try {
+          if (window.parent && window.parent !== window)
+            window.parent.postMessage({ t: "nva-host-" + act, k: tok, from: "nova-os" }, "*");
+          sent = true;
+        } catch (e) { sent = false; }
+        if (act === "reload" && args.local !== false) {
+          setTimeout(function () {
+            var url = location.href.split("#")[0].split("?")[0] + "?recovery=" + Date.now();
+            try { location.replace(url); } catch (e) { location.href = url; }
+          }, 300);
+        }
+        return { ok: sent, act: act, note: sent ? "已向宿主页面派发指令" : "当前不在宿主 iframe 中" };
+      }
+
       default:
-        return { error: "未知命令：" + cmd + "（ping/info/eval/storage/vfs/app/toast/lock/reload/dbg/emit）" };
+        return { error: "未知命令：" + cmd + "（ping/info/eval/storage/vfs/app/toast/lock/reload/dbg/emit/cache/appreset/netreset/sysreset/forcerefresh/dump/hostpage）" };
     }
   }
 

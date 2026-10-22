@@ -1203,6 +1203,26 @@ button { font-family: inherit; }
   background: #1d2027;
   border-top: 1px solid #2a2e38;
 }
+/* 维护终端快捷修复条：平板上比敲命令快，允许横向滚动 */
+.nv-term-quick {
+  -webkit-box-flex: 0; flex: 0 0 auto;
+  display: -webkit-box; display: flex;
+  gap: 6px;
+  padding: 7px 10px;
+  overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  background: #181b21;
+  border-bottom: 1px solid #2a2e38;
+  white-space: nowrap;
+}
+.nv-term-quick::-webkit-scrollbar { height: 4px; }
+.nv-term-quick::-webkit-scrollbar-thumb { background: #333947; border-radius: 4px; }
+.nv-term-quick .nv-term-q {
+  -webkit-box-flex: 0; flex: 0 0 auto;
+  font-size: 12px;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
 .nv-term-prompt { color: var(--gold); font-weight: 700; }
 .nv-term-input {
   -webkit-box-flex: 1; flex: 1 1 auto;

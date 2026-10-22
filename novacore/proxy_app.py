@@ -204,9 +204,18 @@ def create_proxy_app():
                 # 磁盘副本启动（纯 no-cache 在部分 WebView 会直接失败）。
                 resp.headers["Cache-Control"] = "no-cache, max-age=60"
             else:
-                # 应用内部页面（lib/mojuan、lib/quickdraw、lib/phigros 等）：
-                # 必须长缓存，否则断网后打不开这些应用。
-                resp.headers["Cache-Control"] = "public, max-age=31536000"
+                # 应用内部页面（lib/mojuan、lib/quickdraw、lib/phigros 等）。
+                #
+                # 这里曾经是 public, max-age=31536000（一年不回源），踩过坑：
+                # 这些页面内部还有自己写死的模块引用，例如 phi 的
+                #     script-1.5.9.2.js: import "./utils/interact.js?v=<手写串>"
+                # 版本号永不变化 → 浏览器把那个确切 URL 的坏副本钉死一年，
+                # 应用永久白屏，只能清缓存（或重装系统）才能救。墨卷也踩过。
+                #
+                # 现在与顶层入口一致：允许缓存但每次校验（ETag/304，正文仅
+                # KB 级）。断网时仍读磁盘副本；坏一次也不会被钉死一年。
+                # 页面内的 js/css 仍按 apply_long_cache 一年长缓存。
+                resp.headers["Cache-Control"] = "no-cache, max-age=60"
         else:
             resp = send_file(fp, mimetype=ctype, conditional=False)
             # 看门狗重试的 index.html?t=..&r=.. 不投毒：它只是一次性绕缓存副本，
@@ -216,10 +225,20 @@ def create_proxy_app():
             # 可用的根基：必须始终长缓存，否则一旦断网，浏览器直接加载失败。
             # cache_poison 只控制“平台(CDN)静态资源”是否缓存一年，不应影响我们
             # 自己的运行时代码。
-            if not is_retry_url:
-                apply_long_cache(resp)
-            else:
+            if is_retry_url:
                 resp.headers["Cache-Control"] = "no-cache"
+            elif entry_name.startswith("lib/phigros/"):
+                # phi 是 Vite 构建产物：内部 import 的 URL 由构建时写死，
+                # 来源「文件名 hash」或「作者手写的 ?v=」。两者都可能长期不变，
+                # 配合一年不回源 + 删掉 ETag，坏副本会被永久钉死（白屏）。
+                # 这里改用 conditional=True 做真正的条件请求：ETag 命中回
+                # 304（不重传正文），文件一变 ETag 就变，缓存最迟一天后失效。
+                # 注意不能用自定义 ETag 覆盖 Flask 生成的那个——协商是拿
+                # 它自己的 ETag 做的，覆盖后反而不一致（永远 200）。
+                resp = send_file(fp, mimetype=ctype, conditional=True)
+                resp.headers["Cache-Control"] = "public, max-age=86400"
+            else:
+                apply_long_cache(resp)
         # blob 应用（origin=null）内 @font-face / fetch 与外层预取均依赖跨域许可
         resp.headers["Access-Control-Allow-Origin"] = "*"
         resp.headers["X-Content-Type-Options"] = "nosniff"

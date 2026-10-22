@@ -365,7 +365,61 @@
         if (d.k !== TOKEN) return;
         if (d.t === "nva-toggle") toggle();
         else if (d.t === "nva-hide") hide();
+
+        /* 维护命令 hostpage 的宿主侧动作（OS iframe → 父页面）。
+         * 只接受已握手 iframe 的令牌，避免宿主页面里别的脚本伪造。 */
+        else if (d.t === "nva-host-freeze") hostFreeze();
+        else if (d.t === "nva-host-thaw") hostThaw();
+        else if (d.t === "nva-host-reload") recoverOS();
+        else if (d.t === "nva-host-show") show();
+        else if (d.t === "nva-host-hide") hide();
     });
+
+    /* 冻结宿主页面：停掉 CSS 动画/过渡、锁滚动。
+     * 目的是省电与防误触（音游、视频等需要独占触摸的场合），
+     * 不用 display:none —— 部分 WebView 会把隐藏 iframe 判为后台并挂起。 */
+    var hostFrozen = false;
+    var freezeStyle = null;
+    function hostFreeze() {
+        if (hostFrozen) return;
+        hostFrozen = true;
+        try {
+            if (!freezeStyle) {
+                freezeStyle = document.createElement("style");
+                freezeStyle.setAttribute("data-nova-freeze", "1");
+                freezeStyle.textContent =
+                    "html.nv-host-frozen *,html.nv-host-frozen *::before," +
+                    "html.nv-host-frozen *::after{" +
+                    "animation-play-state:paused!important;" +
+                    "transition:none!important;}";
+                (document.head || document.documentElement).appendChild(freezeStyle);
+            }
+            document.documentElement.classList.add("nv-host-frozen");
+            if (window.__nvFrozenScroll == null) {
+                window.__nvFrozenScroll = {
+                    overflow: document.documentElement.style.overflow,
+                    bodyOverflow: document.body ? document.body.style.overflow : ""
+                };
+            }
+            document.documentElement.style.overflow = "hidden";
+            if (document.body) document.body.style.overflow = "hidden";
+        } catch (e) { }
+        poke("freeze");
+    }
+    function hostThaw() {
+        if (!hostFrozen) return;
+        hostFrozen = false;
+        try {
+            document.documentElement.classList.remove("nv-host-frozen");
+            var saved = window.__nvFrozenScroll;
+            if (saved) {
+                document.documentElement.style.overflow = saved.overflow || "";
+                if (document.body) document.body.style.overflow = saved.bodyOverflow || "";
+                window.__nvFrozenScroll = null;
+            }
+        } catch (e) { }
+        poke("thaw");
+    }
 
     function sendDiag(d) {
         try {
