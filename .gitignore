@@ -46,3 +46,8 @@ build/
 novelsrc/source_verify.json
 novelsrc/source_index.json
 novelsrc/*.json.tmp
+
+# 验证框架的运行产物（进度/锁/日志/截图由 runner 生成，不入库）
+verify/state/runner.lock
+verify/state/summary.json
+verify/logs/

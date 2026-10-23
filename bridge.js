@@ -122,6 +122,28 @@
         setTimeout(handshake, 400);
         setTimeout(handshake, 1200);
 
+        /* ---- OS 真正就绪上报（nva-ready） ----
+         * handshake 只证明「HTML 解析到 <head>」，而 os.js 可能 404、被缓存
+         * 截断、或返回非 JS 内容（CDN 错误页）。这种情况下 OS 永远不会 boot，
+         * 但 loader 已经认为握手成功、停掉看门狗，用户看到的就是死锁屏。
+         * 这里等 window.OS.__booted 变真后再上报一次，loader 据此才认为
+         * 「真的起来了」；超时未上报则让看门狗继续重建。 */
+        (function readyWatch() {
+            var tries = 0;
+            var timer = setInterval(function () {
+                tries++;
+                var ok = false;
+                try { ok = !!(window.OS && window.OS.__booted); } catch (e) { }
+                if (ok) {
+                    clearInterval(timer);
+                    try { window.parent.postMessage({ t: "nva-ready" }, "*"); } catch (e) { }
+                    return;
+                }
+                // 约 12 秒仍未 boot：停止上报，交给 loader 看门狗重建
+                if (tries > 240) clearInterval(timer);
+            }, 50);
+        })();
+
         /* ---- SW 封禁：Tzy OS 仅在手动开启离线模式时注册 SW，这里直接拦截 ---- */
         try {
             if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {

@@ -1,0 +1,84 @@
+[
+  {
+    "id": "T01_boot",
+    "title": "真实浏览器启动 OS：9 个内置应用注册、桌面图标、无 JS 错误",
+    "timeout": 120
+  },
+  {
+    "id": "T02_inject",
+    "title": "完整注入链：宿主页 → boot-stub → loader → iframe → OS booted",
+    "timeout": 150
+  },
+  {
+    "id": "T03_devterm_ui",
+    "title": "维护终端可从桌面打开：快捷条 10 按钮、输入框、横幅",
+    "timeout": 150
+  },
+  {
+    "id": "T04_devterm_cmds",
+    "title": "维护终端命令：ping/info/cache/appreset/dump/help/危险确认/未知参数",
+    "timeout": 240
+  },
+  {
+    "id": "T05_offline_boot",
+    "title": "后端停止后从磁盘缓存重新打开仍能启动（离线自恢复）",
+    "timeout": 240,
+    "stop_server_after": true
+  },
+  {
+    "id": "T06_backend_down",
+    "title": "断劫持：__boot__.js 失败回落 snapshot 缓存，OS 仍可用",
+    "timeout": 240,
+    "stop_server_after": true
+  },
+  {
+    "id": "T07_cache_headers",
+    "title": "缓存头策略：入口 public,max-age=60；phi 资源可条件校验；snapshot 一年",
+    "timeout": 90
+  },
+  {
+    "id": "T08_etag_304",
+    "title": "phi 静态资源 ETag 命中 304、文件变更后失效",
+    "timeout": 90
+  },
+  {
+    "id": "T09_appreset_self",
+    "title": "appreset all 不自毁：终端自身跳过、内置应用 restored 不丢",
+    "timeout": 180
+  },
+  {
+    "id": "T10_hostpage_freeze",
+    "title": "hostpage freeze/thaw 在真实注入下冻结/还原宿主页面",
+    "timeout": 180
+  },
+  {
+    "id": "T11_corrupt_os_js",
+    "title": "os.js 返回损坏内容时看门狗能自愈（最多 3 轮）",
+    "timeout": 240
+  },
+  {
+    "id": "T12_hash_mismatch",
+    "title": "缓存版本号错乱（?v= 指向旧文件）下仍能启动",
+    "timeout": 180
+  },
+  {
+    "id": "T13_storage_corrupt",
+    "title": "localStorage/IndexedDB 内容损坏时不崩溃、可自我修复",
+    "timeout": 180
+  },
+  {
+    "id": "T14_slow_network",
+    "title": "弱网（请求延迟 2s）下不误判失败、最终启动",
+    "timeout": 240
+  },
+  {
+    "id": "T15_hang_recovery",
+    "title": "系统卡死模拟（主线程长阻塞）后恢复",
+    "timeout": 240
+  },
+  {
+    "id": "T16_phi_white",
+    "title": "phi 白屏回归：interact.js 版本号随文件变化，加载完整",
+    "timeout": 180
+  }
+]

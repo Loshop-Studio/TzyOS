@@ -199,10 +199,13 @@ def create_proxy_app():
             resp.headers["Content-Type"] = "text/html; charset=utf-8"
             resp.headers["ETag"] = etag
             if is_top_index:
-                # 顶层入口：允许缓存但每次使用前校验（等价 no-cache），
-                # 并显式给一个短 max-age 兜底，确保断网时浏览器仍能使用
-                # 磁盘副本启动（纯 no-cache 在部分 WebView 会直接失败）。
-                resp.headers["Cache-Control"] = "no-cache, max-age=60"
+                # 顶层入口：短 max-age（60 秒内直接用磁盘副本，断网也能启动），
+                # 过期后必须回源校验（max-age 本身已含此语义）。
+                #
+                # 注意不能用 "no-cache, max-age=60"：no-cache 的优先级高于
+                # max-age，浏览器会忽略 max-age、每次强制回源，等于完全没有
+                # 离线兜底。实测断网后 reload 直接 ERR_CONNECTION_REFUSED。
+                resp.headers["Cache-Control"] = "public, max-age=60"
             else:
                 # 应用内部页面（lib/mojuan、lib/quickdraw、lib/phigros 等）。
                 #
@@ -212,10 +215,11 @@ def create_proxy_app():
                 # 版本号永不变化 → 浏览器把那个确切 URL 的坏副本钉死一年，
                 # 应用永久白屏，只能清缓存（或重装系统）才能救。墨卷也踩过。
                 #
-                # 现在与顶层入口一致：允许缓存但每次校验（ETag/304，正文仅
-                # KB 级）。断网时仍读磁盘副本；坏一次也不会被钉死一年。
-                # 页面内的 js/css 仍按 apply_long_cache 一年长缓存。
-                resp.headers["Cache-Control"] = "no-cache, max-age=60"
+                # 现在与顶层入口一致：短 max-age + ETag 校验。60 秒内直接用
+                # 磁盘副本（离线也能打开），过期后回源拿新内容；坏一次也不
+                # 会被钉死一年。页面内的 js/css 仍按 apply_long_cache 长缓存。
+                # 同样不能用 "no-cache, max-age=60"：no-cache 会让 max-age 失效。
+                resp.headers["Cache-Control"] = "public, max-age=60"
         else:
             resp = send_file(fp, mimetype=ctype, conditional=False)
             # 看门狗重试的 index.html?t=..&r=.. 不投毒：它只是一次性绕缓存副本，

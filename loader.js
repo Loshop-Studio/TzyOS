@@ -32,6 +32,7 @@
     var armedAt = 0;         // 最近一次唤起时间，用于拦截随后的表单提交
     var handshaked = false;  // iframe 内 bridge 是否已握手（= HTML/JS 真正跑起来）
     var reloads = 0;         // iframe 加载失败重试次数
+    var osReady = false;     // iframe 内 OS 是否真正 boot 完成（nva-ready）
     var watchdog = 0;
     var lastToggleAt = 0;    // 防止一次口令触发两次开关（闪一下）
     var activationPending = false;
@@ -136,6 +137,7 @@
         if (watchdog) { clearTimeout(watchdog); watchdog = 0; }
         shown = true;
         handshaked = false;
+        osReady = false;
         reloads = 0;
         armedAt = Date.now();
         var bust = "?recovery=" + Date.now();
@@ -263,7 +265,7 @@
         if (watchdog) clearTimeout(watchdog);
         watchdog = setTimeout(function () {
             watchdog = 0;
-            if (!shown || handshaked || reloads >= 3) return;
+            if (!shown || osReady || reloads >= 3) return;
             // 不再因 navigator.onLine === false 直接放弃：WebView 息屏恢复后
             // 常常先报告离线，而本地服务（IP 直连）其实是通的。此前在这里
             // return 会让黑屏 iframe 永远停在自定义域名上且吞掉所有触摸。
@@ -275,11 +277,16 @@
                 if (frame && frame.parentNode) frame.parentNode.removeChild(frame);
             } catch (e) { }
             frame = null;
+            osReady = false;
+            handshaked = false;
             try {
                 createFrame(frameSrc() + bust);
             } catch (e) { }
             armWatchdog();
         }, 8000);
+        // 说明：8 秒是「从显示到 OS.__booted」的预算。首次冷启动在弱机上
+        // 可能更久，但 bridge 的 nva-ready 一到就会立刻清掉这里的定时器，
+        // 所以宁可稍紧一点，让坏缓存更快被换掉（最多 3 轮）。
     }
 
     function show() {
@@ -293,7 +300,10 @@
         armedAt = Date.now();
         poke("show");
         try { frame.focus({ preventScroll: true }); } catch (e) { }
-        if (!handshaked) armWatchdog();
+        // 关键：不能只看 handshaked。bridge 在 <head> 就握手，os.js 坏掉时
+        // 握手仍是 true，此时不挂看门狗就等于放弃自愈。只要 OS 还没真正
+        // ready（osReady=false）就必须继续看护。
+        if (!osReady) armWatchdog();
     }
 
     function hide() {
@@ -309,7 +319,7 @@
         poke("hide");
     }
     window.addEventListener("online", function () {
-        if (shown && !handshaked) armWatchdog();
+        if (shown && !osReady) armWatchdog();
     });
     function toggle() {
         // 一次口令在部分内核上会同时命中 input 与 keydown 两条通道，
@@ -340,9 +350,14 @@
         if (d.t === "nva-handshake") {
             // 仅接受自己创建的 iframe，通过后下发一次性令牌
             if (frame && e.source === frame.contentWindow) {
-                handshaked = true;                 // iframe 内 HTML/JS 已真正执行
-                reloads = 0;
-                if (watchdog) { clearTimeout(watchdog); watchdog = 0; }
+                // 注意：这里只代表「HTML 解析到 <head>」，不代表 OS 起来了。
+                // os.js 可能 404 / 被截断 / 返回 CDN 错误页 —— 那样 OS 永远
+                // 不会 boot，若在此停掉看门狗就会永久卡死锁屏。真正就绪由
+                // bridge 的 nva-ready（OS.__booted === true）确认。
+                handshaked = true;                 // 已握手（bridge 已执行）
+                // 这里绝不能停看门狗：握手只说明 HTML 解析到 <head>。
+                // 若在此 clearTimeout，os.js 坏掉时再没有任何机制重建 iframe，
+                // 用户会永久停在锁屏（实测 T11 复现）。停看门狗只在 nva-ready。
                 // 记住 iframe 实际使用的电脑服务基址（同源时为空串 → 清掉记录），
                 // 供息屏恢复/看门狗重建时选择正确地址。
                 if (typeof d.b === "string") saveBase(d.b);
@@ -359,6 +374,16 @@
         if (d.t === "nva-netbase") {
             if (frame && e.source === frame.contentWindow && typeof d.b === "string") {
                 saveBase(d.b);
+            }
+            return;
+        }
+        if (d.t === "nva-ready") {
+            // OS 真正起来了：这时才认为加载成功，停掉重试计数。
+            if (frame && e.source === frame.contentWindow) {
+                osReady = true;
+                reloads = 0;
+                if (watchdog) { clearTimeout(watchdog); watchdog = 0; }
+                poke("ready");
             }
             return;
         }
