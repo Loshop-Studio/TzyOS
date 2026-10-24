@@ -2,7 +2,20 @@
  * 每个用例脚本末尾调用 done(ok, detail) 即可。 */
 const path = require('path');
 const fs = require('fs');
-const { chromium } = require('/tmp/node_modules/playwright-core');
+// playwright 可能装在 /opt（持久）或 /tmp（易被清理），按序探测
+const PW_CANDIDATES = [
+  '/opt/tzy-verify/node_modules/playwright-core',
+  '/tmp/node_modules/playwright-core',
+];
+let _pw = null;
+for (const c of PW_CANDIDATES) {
+  try { _pw = require(c); break; } catch (e) { /* 继续找 */ }
+}
+if (!_pw) {
+  console.error('找不到 playwright-core，已尝试: ' + PW_CANDIDATES.join(', '));
+  process.exit(3);
+}
+const { chromium } = _pw;
 
 const HOST = 'web-alicdn.zyai.cc';
 const PORT = 8097;

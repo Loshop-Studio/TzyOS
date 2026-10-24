@@ -42,12 +42,17 @@ SUMMARY = os.path.join(STATE, "summary.json")
 LOCKFILE = os.path.join(STATE, "runner.lock")
 
 # 依赖路径（此前会话里装好的，机器重启后仍在 /tmp 会丢，故支持回退系统 node）
+# 优先用持久目录 /opt（/tmp 会被系统定期清理，导致 Node/playwright 丢失）
 NODE_BINS = [
+    "/opt/tzy-verify/node-v20.18.1-linux-x64/bin",
     "/tmp/node-v20.18.1-linux-x64/bin",
     "/tmp/node-v18.20.4-linux-x64/bin",
 ]
 CHROMIUM = "/snap/bin/chromium"
-PW_MODULE = "/tmp/node_modules/playwright-core"
+PW_CANDIDATES = [
+    "/opt/tzy-verify/node_modules/playwright-core",
+    "/tmp/node_modules/playwright-core",
+]
 
 for d in (STATE, LOGS, SHOTS):
     os.makedirs(d, exist_ok=True)
@@ -114,8 +119,16 @@ def node_ok():
         return False
 
 
+def pw_module():
+    """返回可用的 playwright-core 路径（None 表示未安装）。"""
+    for p in PW_CANDIDATES:
+        if os.path.isdir(p):
+            return p
+    return None
+
+
 def has_playwright():
-    return os.path.isdir(PW_MODULE)
+    return pw_module() is not None
 
 
 # ----------------------------------------------------------------- 服务管理
@@ -307,7 +320,7 @@ def main():
         log("错误：找不到 node（期望 %s）" % ", ".join(NODE_BINS))
         return 2
     if not has_playwright():
-        log("错误：缺少 playwright-core（期望 %s）" % PW_MODULE)
+        log("错误：缺少 playwright-core（期望 %s）" % " 或 ".join(PW_CANDIDATES))
         return 2
     if not os.path.isfile(CHROMIUM):
         log("错误：找不到 chromium（%s）" % CHROMIUM)
