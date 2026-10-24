@@ -4,7 +4,6 @@
  * - 支持把当前文档另存到电脑（api/fs/put）或离线空间（VFS，断网可用）
  * - 文件管理器用 OS.openApp("editor", {__editRemote,payload}) 调起远程文件编辑，
  *   保存时写回原处（电脑 / FTP / SMB / 离线空间）
- * Loshop & Cpt
  * ============================================================ */
 (function () {
   "use strict";

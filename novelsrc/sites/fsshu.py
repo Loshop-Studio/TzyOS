@@ -3,7 +3,6 @@
 
 复用 biquge 分页目录模板，但目录前缀为 biquge、目录页数量靠试探（最多 50 页），
 正文分页标记与广告行判定与 biquge5 略有差异。
-Loshop & Cpt
 """
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """飞卢小说网（b.faloo.com）—— 由 go-novel-dl internal/site/faloo.go 移植。
-Loshop & Cpt
 """
 import html as _html
 import re

@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Tzy OS</title>
-<!-- 极简网页 OS · Loshop & Cpt -->
+<!-- Tzy OS ·-->
 <!-- nova.html：新入口（旧 os.html 已被缓存投毒一年不回源，故换新名零清缓存升级） -->
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="os.css?v=1792653867">
+<link rel="stylesheet" href="os.css?v=1792830647">
 </head>
 <body>
 
@@ -40,7 +40,7 @@
       </div>
     </div>
   </div>
-  <div class="nv-lock-foot">Tzy OS&nbsp;&nbsp;Loshop &amp; Cpt</div>
+  <div class="nv-lock-foot">Tzy OS</div>
 </div>
 
 <!-- ============ 桌面 ============ -->
@@ -51,10 +51,10 @@
     <span class="nv-sb-spacer"></span>
     <span id="nv-sb-net" class="nv-sb-dot offline" title="探测中…"></span>
     <span id="nv-sb-clock"></span>
-    <button id="nv-sb-home" class="nv-sb-btn" title="显示桌面">桌</button>
-    <button id="nv-sb-task" class="nv-sb-btn" title="任务">任</button>
-    <button id="nv-sb-lock" class="nv-sb-btn" title="锁屏">锁</button>
-    <button id="nv-sb-back" class="nv-sb-btn" title="返回专栏">退</button>
+    <button id="nv-sb-home" class="nv-sb-btn" title="显示桌面" aria-label="显示桌面">回桌面</button>
+    <button id="nv-sb-task" class="nv-sb-btn" title="所有窗口" aria-label="所有窗口">窗口</button>
+    <button id="nv-sb-lock" class="nv-sb-btn" title="锁屏" aria-label="锁屏">锁屏</button>
+    <button id="nv-sb-back" class="nv-sb-btn" title="返回原页面" aria-label="返回原页面">返回</button>
   </div>
 
   <!-- 应用图标网格 -->
@@ -76,18 +76,18 @@
 <script src="lib/preview/mammoth.browser.min.js?v=1791595792"></script>
 <script src="lib/preview/jszip.min.js?v=1791595792"></script>
 <!-- OS 核心 -->
-<script src="os.js?v=1792654898"></script>
+<script src="os.js?v=1792830647"></script>
 <!-- 应用（注册即上桌面；?v= 为破缓存版本号。phi/vbrowser 已改为商店预装包，可卸载） -->
-<script src="apps/editor.js?v=1791595790"></script>
-<script src="apps/files.js?v=1792565366"></script>
-<script src="apps/calc.js?v=1791595790"></script>
-<script src="apps/settings.js?v=1792308372"></script>
-<script src="apps/media.js?v=1791808100"></script>
-<script src="apps/store.js?v=1791595790"></script>
-<script src="apps/preview.js?v=1791595790"></script>
-<script src="apps/search.js?v=1792412707"></script>
-<!-- 开发终端：开发模式本地控制台（电脑 ↔ 平板命令通道，见 novacore/devmode.py） -->
-<script src="apps/devterm.js?v=1792654760"></script>
+<script src="apps/editor.js?v=1792830610"></script>
+<script src="apps/files.js?v=1792830610"></script>
+<script src="apps/calc.js?v=1792830610"></script>
+<script src="apps/settings.js?v=1792830709"></script>
+<script src="apps/media.js?v=1792830610"></script>
+<script src="apps/store.js?v=1792830610"></script>
+<script src="apps/preview.js?v=1792830610"></script>
+<script src="apps/search.js?v=1792830610"></script>
+<!-- 维护终端：本地诊断与重置命令 -->
+<script src="apps/devterm.js?v=1792830610"></script>
 <script>/* 启动 */ window.OS && window.OS.boot();</script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 
 启动后自动隐藏控制台窗口，只在任务栏托盘留一个自绘图标；右键菜单提供
 「打开管理界面 / 查看日志 / 退出」。仅 Windows 有效，其它平台静默跳过。
-Loshop & Cpt"""
+"""
 import ctypes
 import os
 import threading

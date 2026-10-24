@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """SF轻小说（sfacg.com）—— 由 go-novel-dl internal/site/sfacg.go 移植。
-Loshop & Cpt
 """
 import re
 from urllib.parse import urlsplit

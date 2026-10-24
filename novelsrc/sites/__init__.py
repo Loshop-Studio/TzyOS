@@ -2,7 +2,6 @@
 """书源模块集合：自动发现本目录下所有模块，import 即完成 @register 注册。
 
 新增站点只需在本目录放一个 <key>.py，无需改动本文件。
-Loshop & Cpt
 """
 import importlib
 import pkgutil

@@ -7,7 +7,6 @@
 
 解释器优先使用随包分发的内嵌便携运行时 runtime\\python\\python.exe，
 目标机因此无需安装 Python；开发机上自动回退当前解释器。
-Loshop & Cpt
 """
 import atexit
 import os

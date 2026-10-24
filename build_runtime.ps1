@@ -11,7 +11,6 @@
 #      powershell -NoProfile -ExecutionPolicy Bypass -File build_runtime.ps1
 #      powershell ... -Force     force rebuild (default: skip if present)
 #
-#  Loshop & Cpt
 # ============================================================
 param([switch]$Force)
 

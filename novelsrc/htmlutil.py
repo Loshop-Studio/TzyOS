@@ -3,7 +3,6 @@
 
 底层用 BeautifulSoup（解析器优先 lxml，缺失时回退 html.parser），
 函数语义尽量与 Go 版一致，方便逐站移植。
-Loshop & Cpt
 """
 import re
 from urllib.parse import urljoin, urlsplit, urlunsplit

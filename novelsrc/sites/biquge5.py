@@ -3,7 +3,6 @@
 
 对应 NewBiqugePagedSite("biquge5", "Biquge5", "https://www.biquge5.com", "", cfg)，
 即无路径前缀的分页目录模板站点。
-Loshop & Cpt
 """
 from ..base import register
 from ._biquge_common import BiqugePagedSite

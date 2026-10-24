@@ -7,7 +7,6 @@
 
 注意：本模块文件名以下划线开头，不会被 novelsrc/sites/__init__.py 自动注册。
 纯 Python 3.8 兼容（不得使用 3.9+ 语法）。
-Loshop & Cpt
 """
 import re
 import time

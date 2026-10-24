@@ -5,7 +5,7 @@ into a timestamped zip.
 Usage:
     python nova_backup.py [output_dir]
 
-Loshop & Cpt"""
+"""
 import os
 import sys
 

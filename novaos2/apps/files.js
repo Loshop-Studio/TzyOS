@@ -13,7 +13,6 @@
  *   移动、复制走文件夹选择对话框，支持文件与文件夹递归（仅离线空间）；
  *   单个文件夹可直接「压缩」为 zip（沿用本地 zip 打包）。
  * v3.4.1：VFS「复制到…」可选电脑 / VFS / FTP / SMB；FTP 可配置文件名编码。
- * Loshop & Cpt
  * ============================================================ */
 (function () {
   "use strict";
@@ -707,7 +706,7 @@
     }
     bBatchZip.addEventListener("click", function () { zipEntries(Object.keys(state.selected)); });
 
-    /* ========== 本地压缩 / 解压（纯前端，离线可用；Loshop & Cpt） ========== */
+    /* ========== 本地压缩 / 解压（纯前端，离线可用；） ========== */
     // 按绝对路径参数化的四源原语（callXxx 绑定 state.path，递归遍历必须自带路径）
     function srcList(p) {
       if (state.source === "vfs") return OS.vfs.list(p);

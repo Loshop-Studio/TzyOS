@@ -6,7 +6,6 @@
 取书方式：贴 m.jjwxc.com/book2/<书号> 链接（站内搜索已强制登入，故不对聚合搜索开放）。
 
 注意：本模块纯 Python 3.8 兼容。
-Loshop & Cpt
 """
 import base64
 import binascii

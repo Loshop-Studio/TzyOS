@@ -5,7 +5,6 @@
 本机 403 不可达，未能实测；逻辑逐行对照 Go 版。AES-GCM 解密使用 PyCryptodome。
 textconv.ToSimplified / NormalizeBookLocale 在 Go 里依赖 OpenCC 数据，缺失时为原样
 返回；Python 侧无 opencc，统一按原样返回（英文站点影响极小）。
-Loshop & Cpt
 """
 import base64
 import hashlib

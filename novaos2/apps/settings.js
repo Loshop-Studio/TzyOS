@@ -1,7 +1,6 @@
 /* ============================================================
  * Tzy OS · 设置
  * 外观（壁纸）/ 安全（锁屏密码入口）/ 网络状态 / 离线空间 / 关于
- * Loshop & Cpt
  * ============================================================ */
 (function () {
   "use strict";
@@ -70,6 +69,7 @@
     /* ---------- 外观 ---------- */
     var cardLook = OS.h("div", "nv-set-card");
     cardLook.appendChild(OS.h("h4", "", "外观"));
+
     var swRow = OS.h("div", "nv-set-row");
     var swBox = OS.h("div", "nv-set-swatches");
     var swatches = {};
@@ -87,10 +87,67 @@
       Object.keys(swatches).forEach(function (k) {
         swatches[k].className = "nv-wp-sw nv-wp-sw-" + k + (Number(k) === id ? " sel" : "");
       });
+      customBox.className = "nv-wp-custom-box" + (id === OS.ui.customId() ? " sel" : "");
     }
-    markSelected(OS.ui.wallpaper());
     swRow.appendChild(swBox);
     cardLook.appendChild(swRow);
+
+    /* 自定义渐变：两个取色器 + 实时预览 + 应用/还原 */
+    var customBox = OS.h("div", "nv-wp-custom-box");
+    var cTitle = OS.h("div", "nv-set-hint", "自定义渐变：选择两种颜色，可即时预览，满意后点「应用」。");
+    customBox.appendChild(cTitle);
+
+    var cPick = OS.h("div", "nv-wp-pickers");
+    var saved = OS.ui.wallpaperColors();
+    var inA = document.createElement("input");
+    inA.type = "color"; inA.className = "nv-wp-color"; inA.value = saved[0];
+    var inB = document.createElement("input");
+    inB.type = "color"; inB.className = "nv-wp-color"; inB.value = saved[1];
+    cPick.appendChild(OS.h("span", "nv-wp-lbl", "起始"));
+    cPick.appendChild(inA);
+    cPick.appendChild(OS.h("span", "nv-wp-lbl", "结束"));
+    cPick.appendChild(inB);
+    customBox.appendChild(cPick);
+
+    var cPrev = OS.h("div", "nv-wp-preview");
+    customBox.appendChild(cPrev);
+    function paintPreview() {
+      cPrev.style.background = "linear-gradient(160deg," + inA.value + " 0%," + inB.value + " 100%)";
+    }
+    paintPreview();
+
+    // 取色变化即预览（不落盘，退出应用自动还原为已保存的壁纸）
+    inA.addEventListener("input", function () {
+      paintPreview();
+      OS.ui.preview(OS.ui.customId(), [inA.value, inB.value]);
+    });
+    inB.addEventListener("input", function () {
+      paintPreview();
+      OS.ui.preview(OS.ui.customId(), [inA.value, inB.value]);
+    });
+
+    var cBtnRow = OS.h("div", "nv-wp-btns");
+    var btnApply = OS.h("button", "nv-btn primary", "应用");
+    var btnRevert = OS.h("button", "nv-btn", "还原");
+    btnApply.addEventListener("click", function () {
+      OS.ui.setWallpaper(OS.ui.customId(), [inA.value, inB.value]);
+      markSelected(OS.ui.customId());
+      OS.toast("已应用自定义壁纸");
+    });
+    btnRevert.addEventListener("click", function () {
+      var c = OS.ui.wallpaperColors();
+      inA.value = c[0]; inB.value = c[1];
+      paintPreview();
+      OS.ui.restore();
+      markSelected(OS.ui.wallpaper());
+      OS.toast("已还原");
+    });
+    cBtnRow.appendChild(btnApply);
+    cBtnRow.appendChild(btnRevert);
+    customBox.appendChild(cBtnRow);
+
+    cardLook.appendChild(customBox);
+    markSelected(OS.ui.wallpaper());
     page.appendChild(cardLook);
 
     /* ---------- 安全 ---------- */
@@ -805,20 +862,33 @@
     /* ---------- 关于 ---------- */
     var cardAbout = OS.h("div", "nv-set-card");
     cardAbout.appendChild(OS.h("h4", "", "关于"));
+
+    // 系统版本：独立一行，便于用户报障时直接读出
+    var vRow = OS.h("div", "nv-set-row");
+    vRow.appendChild(OS.h("span", "nv-set-k", "系统版本"));
+    var ver = typeof OS.version === "function" ? OS.version() : "";
+    var bld = typeof OS.build === "function" ? OS.build() : "";
+    vRow.appendChild(OS.h("span", "nv-set-v", "v" + ver + (bld ? "  (" + bld + ")" : "")));
+    cardAbout.appendChild(vRow);
+
+    var nRow = OS.h("div", "nv-set-row");
+    nRow.appendChild(OS.h("span", "nv-set-k", "系统名称"));
+    nRow.appendChild(OS.h("span", "nv-set-v", "Tzy OS"));
+    cardAbout.appendChild(nRow);
+
+    // 已装应用清单（含各自版本）
     var apps = OS.apps();
+    var listTitle = OS.h("div", "nv-set-row");
+    listTitle.appendChild(OS.h("span", "nv-set-k", "已装应用"));
+    listTitle.appendChild(OS.h("span", "nv-set-v", apps.length + " 个"));
+    cardAbout.appendChild(listTitle);
+
     var list = OS.h("div", "nv-set-apps");
     apps.forEach(function (a) {
-      list.appendChild(document.createTextNode(a.icon + " " + a.name + " · v" + a.version));
+      list.appendChild(document.createTextNode(a.icon + " " + a.name + "  v" + a.version));
       list.appendChild(document.createElement("br"));
     });
     cardAbout.appendChild(list);
-    var about = OS.h("div", "nv-set-about");
-    about.innerHTML =
-      "Tzy OS v1.0.0 · 极简网页操作系统<br>" +
-      "Loshop &amp; Cpt<br>" +
-      "纯本机依赖，无外网亦可启动；兼容华为平板 Chrome 99（ES6）。<br>" +
-      "断 DNS 劫持后自动直连电脑热点 192.168.137.1，FTP/SMB/外网代取继续可用。";
-    cardAbout.appendChild(about);
     page.appendChild(cardAbout);
 
     root.appendChild(page);

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """番茄小说（fanqienovel.com）—— 由 go-novel-dl internal/site/fanqienovel.go 移植。
-Loshop & Cpt
 """
 import functools
 import json

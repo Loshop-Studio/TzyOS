@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """次元姬（ciyuanji.com）—— 由 go-novel-dl internal/site/ciyuanji.go 移植。
 章节正文为单 DES-ECB 解密；移动端搜索接口使用 DES+MD5 签名。
-Loshop & Cpt
 """
 import base64
 import hashlib

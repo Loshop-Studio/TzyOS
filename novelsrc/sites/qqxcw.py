@@ -8,7 +8,6 @@
     单章还可能分页为 <id>_1.html、<id>_2.html …。
 
 注意：本模块纯 Python 3.8 兼容。
-Loshop & Cpt
 """
 import base64
 import binascii

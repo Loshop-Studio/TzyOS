@@ -8,7 +8,6 @@
   download      download_plan + 逐章抓正文
   resolve_url   把站内 URL 反解成 {site, book_id, chapter_id}
 纯 Python 3.8 兼容（不得使用 3.9+ 语法）。
-Loshop & Cpt
 """
 from .http import HttpClient
 

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """爱下电子书（ixdzs8.com）—— 由 go-novel-dl internal/site/ixdzs8.go 移植。
-Loshop & Cpt
 """
 import json
 import re

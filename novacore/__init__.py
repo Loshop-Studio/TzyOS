@@ -1,1 +1,1 @@
-"""Tzy OS stealth 服务核心包。Loshop & Cpt"""
+"""Tzy OS stealth 服务核心包。"""

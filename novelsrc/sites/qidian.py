@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """起点中文网（qidian.com）—— 由 go-novel-dl internal/site/qidian.go 移植。
-Loshop & Cpt
 """
 import json
 import re

@@ -7,7 +7,7 @@ Usage:
     python nova_update.py --dry-run   only report what would change
 
 Also available at runtime: admin page button or POST /api/update.
-Loshop & Cpt"""
+"""
 import argparse
 import os
 import sys

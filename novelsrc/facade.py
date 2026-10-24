@@ -4,7 +4,6 @@
 提供一个 Flask 应用所需的 /novel/api/* 路由（接口形态沿用 go-novel-dl，
 供 OS「小说下载」应用直接使用），聚合 novelsrc 移植的全部中文书源。
 纯 Python 3.8（Windows 7 可用）。
-Loshop & Cpt
 """
 import io
 import os

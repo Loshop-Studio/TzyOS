@@ -18,7 +18,7 @@ rem     build_all.bat        build runtime if missing, assemble, zip
 rem     build_all.bat /nort       skip runtime check (runtime already built)
 rem     build_all.bat /repoall    include every historical app package
 rem
-rem  Loshop & Cpt
+rem
 rem ============================================================
 
 if not exist dist mkdir dist

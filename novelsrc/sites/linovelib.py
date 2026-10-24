@@ -3,7 +3,6 @@
 
 注意：本机对 linovelib.com 返回 403，未做联网实测；字符替换表内嵌自
 internal/site/resources/linovelib.json（仅 yuedu() 混淆页需要）。
-Loshop & Cpt
 """
 import re
 import time

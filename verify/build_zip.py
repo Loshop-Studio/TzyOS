@@ -9,11 +9,27 @@ build_all.bat 依赖 PowerShell/.NET，Linux 跑不了；本脚本按同样的�
   * 必带文件清单；缺失必需文件直接失败
   * zip 条目用正斜杠、不带顶层目录、Optimal 压缩
 """
-import json, os, shutil, sys, zipfile
+import json, os, re, shutil, sys, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG = os.path.join(ROOT, 'dist', 'TzyOS')
-ZIP = os.path.join(ROOT, 'dist', 'TzyOS.zip')
+
+
+def read_version():
+    """从 novaos2/os.js 读取系统版本，作为发布包文件名。
+
+    版本号只有一处定义（OS_VERSION / OS_BUILD），打包时自动取，
+    避免脚本里再抄一份导致漂移。"""
+    src = open(os.path.join(ROOT, 'novaos2', 'os.js'), encoding='utf-8').read()
+    m = re.search(r'var OS_VERSION = "([^"]+)"', src)
+    b = re.search(r'var OS_BUILD = "([^"]+)"', src)
+    if not m:
+        raise SystemExit('未能从 novaos2/os.js 读取 OS_VERSION')
+    return m.group(1), (b.group(1) if b else '')
+
+
+VERSION, BUILD = read_version()
+ZIP = os.path.join(ROOT, 'dist', 'TzyOS-v%s.zip' % VERSION)
 SKIP_DIRS = {'__pycache__', '.git'}
 SKIP_EXT = {'.pyc', '.log'}
 DIRS = ('novacore', 'novelsrc', 'novaos2', 'admin', 'runtime', 'tools')
@@ -87,8 +103,13 @@ def main():
         print('!! 缺少必需文件: %s' % missing)
         return 1
 
-    if os.path.exists(ZIP):
-        os.remove(ZIP)
+    # 清掉同前缀的旧包，避免 dist 里堆积多个版本
+    for old in os.listdir(os.path.dirname(ZIP)):
+        if old.startswith('TzyOS-v') and old.endswith('.zip'):
+            try:
+                os.remove(os.path.join(os.path.dirname(ZIP), old))
+            except OSError:
+                pass
     n = 0
     with zipfile.ZipFile(ZIP, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for dirpath, dirnames, filenames in os.walk(PKG):
@@ -97,7 +118,16 @@ def main():
                 full = os.path.join(dirpath, f)
                 z.write(full, os.path.relpath(full, PKG).replace(os.sep, '/'))
                 n += 1
+    print('[*] 版本 %s%s' % (VERSION, (' (build ' + BUILD + ')') if BUILD else ''))
     print('[*] %s  (%d 文件, %.1f MB)' % (ZIP, n, os.path.getsize(ZIP) / 1048576))
+
+    # 写一份版本信息，供发布脚本与后续核对使用
+    info = os.path.join(os.path.dirname(ZIP), 'latest.json')
+    with open(info, 'w', encoding='utf-8') as f:
+        json.dump({'version': VERSION, 'build': BUILD,
+                   'zip': os.path.basename(ZIP),
+                   'size': os.path.getsize(ZIP)}, f, ensure_ascii=False, indent=1)
+    print('[*] %s' % info)
     return 0
 
 

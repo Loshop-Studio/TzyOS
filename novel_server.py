@@ -6,7 +6,6 @@
 
 直接运行：
     python novel_server.py --port 18089
-Loshop & Cpt
 """
 import argparse
 import os

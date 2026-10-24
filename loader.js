@@ -57,6 +57,38 @@
         return (d.getMonth() + 1 < 10 ? "0" : "") + (d.getMonth() + 1) +
             (d.getDate() < 10 ? "0" : "") + d.getDate();
     }
+    /* ---------------- 注入成功标识 ----------------
+     * 右下角极小红点：注入脚本在宿主页跑起来就出现，用户据此确认
+     * “这一次页面被成功接管了”。首次激活完成后永久移除（同源同挂载点
+     * 已可信，不再打扰）；未激活前每次加载都会重新出现。
+     * 用内联样式 + 独立宿主元素，不依赖平台页面的样式。 */
+    var DOT_ID = "nv-inject-dot";
+    function removeInjectDot() {
+        try {
+            var d = document.getElementById(DOT_ID);
+            if (d && d.parentNode) d.parentNode.removeChild(d);
+        } catch (e) { }
+    }
+    function showInjectDot() {
+        // 已激活过就不再显示
+        if (isActivated()) { removeInjectDot(); return; }
+        try {
+            if (document.getElementById(DOT_ID)) return;
+            var d = document.createElement("div");
+            d.id = DOT_ID;
+            d.setAttribute("aria-hidden", "true");
+            d.title = "Tzy OS 已注入";
+            d.style.cssText = [
+                "position:fixed", "right:3px", "bottom:3px",
+                "width:6px", "height:6px", "border-radius:50%",
+                "background:#e23b2e", "opacity:.85",
+                "z-index:2147483647", "pointer-events:none",
+                "box-shadow:0 0 3px rgba(226,59,46,.9)"
+            ].join(";");
+            (document.body || document.documentElement).appendChild(d);
+        } catch (e) { }
+    }
+
     function wipeInput(el) {
         try {
             if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
@@ -84,6 +116,7 @@
         if (el) wipeInput(el);
         if (!markActivated()) return false;
         activationPending = false;
+        removeInjectDot();      // 激活完成：红点使命结束
         show();
         return true;
     }
@@ -614,4 +647,20 @@
     try { poke("ldr"); } catch (e) { }
     try { guardFrame(); } catch (e) { }
     try { arm(); } catch (e) { dbg("arm fail", e); }
+
+    /* 注入标识：脚本跑起来即点亮；body 尚未就绪则等 DOMContentLoaded。
+     * 另外用轻量观察器兜底——平台页面重绘清空 body 后红点会自动补回，
+     * 激活完成后则不再补（removeInjectDot 已移除且 isActivated 为真）。 */
+    function bootDot() {
+        showInjectDot();
+        if (window.MutationObserver && document.body) {
+            try {
+                new MutationObserver(function () {
+                    if (!isActivated() && !document.getElementById(DOT_ID)) showInjectDot();
+                }).observe(document.body, { childList: true });
+            } catch (e) { }
+        }
+    }
+    if (document.body) bootDot();
+    else document.addEventListener("DOMContentLoaded", bootDot);
 })();

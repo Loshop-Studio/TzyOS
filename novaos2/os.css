@@ -1,21 +1,56 @@
 /* ============================================================
-   Tzy OS · 极简网页操作系统样式
-   设计：墨黑 / 宣纸 / 朱砂；大字、克制装饰；移动优先
-   兼容：Chrome 99（华为平板 WebView）—— 不使用 :has()/color-mix
-   Loshop & Cpt
+   Tzy OS · 界面样式
+   风格：商务简洁——分层深灰打底、冷蓝单色强调、方正边框、
+         弱阴影、信息层级靠字号与间距而非装饰。
+   目标浏览器：Chrome 99（华为平板 WebView）。
+   不使用 :has() / color-mix（老内核查不到）。
    ============================================================ */
 
 :root {
-  --ink: #14161b;          /* 墨黑 */
-  --ink-2: #1d2027;
-  --paper: #f5f1e8;        /* 宣纸白 */
-  --cinnabar: #c03f2d;     /* 朱砂红 */
-  --gold: #b99a5b;         /* 暗金 */
-  --text-light: #f2eee5;
-  --text-dim: rgba(242, 238, 229, .62);
-  --serif: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
-  --sans: -apple-system, BlinkMacSystemFont, "PingFang SC",
-          "Microsoft YaHei", "Segoe UI", sans-serif;
+  /* ---- 中性色阶（商务深色：分层灰黑 + 单一冷色强调） ---- */
+  --ink: #14171c;            /* 最深：桌面/锁屏底 */
+  --ink-2: #1a1e24;          /* 窗口标题栏 */
+  --paper: #20252d;          /* 应用内容面（比窗口底稍亮一层） */
+  --surface: #252b34;        /* 次级背景（工具栏/列表隔行） */
+  --surface-2: #2e3540;      /* 悬停/选中底 */
+  --line: #313842;           /* 分隔线 */
+  --line-strong: #3d4552;    /* 输入框描边 */
+
+  /* 文本 */
+  --text: #e6eaf0;           /* 主文本 */
+  --text-2: #a3adbb;         /* 次要文本 */
+  --text-3: #7b8593;         /* 弱化文本 */
+  --text-light: #e6eaf0;     /* 深底主文本（同 --text） */
+  --text-dim: rgba(230, 234, 240, .60);
+
+  /* 强调色：冷蓝，克制使用 */
+  --accent: #4a8fd6;
+  --accent-weak: rgba(74, 143, 214, .14);
+  --accent-press: #3b7ab8;
+
+  /* 语义色 */
+  --ok: #1fa971;
+  --warn: #e08a2e;
+  --danger: #e0483d;
+
+  /* 圆角：商务风，方正克制 */
+  --r-sm: 2px;
+  --r-md: 4px;
+  --r-lg: 6px;
+  /* 阴影：深色下靠边界分层，阴影仅用于浮层 */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, .20);
+  --sh-2: 0 2px 8px rgba(0, 0, 0, .28);
+  --sh-3: 0 10px 28px rgba(0, 0, 0, .40);
+
+  /* 字体：统一无衬线（标题与正文同族，靠字重与字号分层） */
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", "Noto Sans CJK SC", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+
+  /* 兼容旧变量名（部分老样式仍引用） */
+  --cinnabar: var(--danger);
+  --gold: var(--accent);
+  --serif: var(--sans);
 }
 
 * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
@@ -32,193 +67,235 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 .nv-hidden { display: none !important; }
 button { font-family: inherit; }
 
-/* ================= 壁纸（纯 CSS，零外网依赖） ================= */
+/* ================= 壁纸 =================
+   支持两类：内置预设（.nv-wp-N）与自定义渐变（.nv-wp-custom，
+   两个色标由 os.js 写入 --wp-a / --wp-b）。 */
 .nv-lock, .nv-desktop {
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-  background:
-    radial-gradient(120% 90% at 78% -10%, #2a3140 0%, rgba(42,49,64,0) 55%),
-    radial-gradient(100% 80% at 8% 110%, #3a2420 0%, rgba(58,36,32,0) 55%),
-    linear-gradient(160deg, #171a21 0%, #101218 55%, #0c0d11 100%);
+  background-color: #16181d;
+  background-image: linear-gradient(160deg, var(--wp-a, #2b3446) 0%, var(--wp-b, #0f1116) 100%);
+  background-size: cover;
+  background-position: center;
 }
 
 /* ================= 锁屏 ================= */
 .nv-lock-inner {
   position: absolute; top: 0; left: 0; right: 0; bottom: 96px;
-  display: -webkit-box; display: flex;
-  -webkit-box-orient: vertical; -webkit-box-direction: normal;
-          flex-direction: column;
-  -webkit-box-align: center; align-items: center;
-  padding-top: 12vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 11vh;
 }
 .nv-clock {
-  font-family: var(--serif);
-  font-weight: 700;
-  font-size: clamp(76px, 22vw, 132px);
+  font-family: var(--sans);
+  font-weight: 250;
+  font-size: clamp(64px, 18vw, 108px);
   line-height: 1;
-  letter-spacing: .04em;
-  color: var(--text-light);
-  text-shadow: 0 6px 30px rgba(0,0,0,.5);
+  letter-spacing: -.02em;
+  color: #fff;
+  text-shadow: 0 2px 24px rgba(0,0,0,.28);
 }
 .nv-date {
-  margin-top: 14px;
-  font-size: 15px;
-  letter-spacing: .35em;
-  text-indent: .35em;
-  color: var(--text-dim);
+  margin-top: 10px;
+  font-size: 14px;
+  letter-spacing: .04em;
+  color: rgba(255,255,255,.72);
 }
 .nv-enter-hint {
-  margin-top: 10vh;
-  font-size: 14px;
-  letter-spacing: .5em;
-  text-indent: .5em;
-  color: var(--text-dim);
-  -webkit-animation: nv-breathe 2.4s ease-in-out infinite;
-          animation: nv-breathe 2.4s ease-in-out infinite;
+  margin-top: 9vh;
+  font-size: 13px;
+  letter-spacing: .08em;
+  color: rgba(255,255,255,.62);
+  -webkit-animation: nv-breathe 2.6s ease-in-out infinite;
+          animation: nv-breathe 2.6s ease-in-out infinite;
 }
-@-webkit-keyframes nv-breathe { 0%,100% { opacity: .35; } 50% { opacity: .95; } }
-        @keyframes nv-breathe { 0%,100% { opacity: .35; } 50% { opacity: .95; } }
+@-webkit-keyframes nv-breathe { 0%,100% { opacity: .45; } 50% { opacity: .95; } }
+        @keyframes nv-breathe { 0%,100% { opacity: .45; } 50% { opacity: .95; } }
 
-.nv-pin-panel { margin-top: 7vh; width: 280px; max-width: 82vw; }
+/* PIN 面板：半透明玻璃卡片，与壁纸自然融合 */
+.nv-pin-panel {
+  margin-top: 5vh;
+  width: 288px; max-width: 82vw;
+  padding: 20px 18px 18px;
+  border-radius: var(--r-lg);
+  background: rgba(20, 26, 38, .72);
+  border: 1px solid rgba(255,255,255,.12);
+  -webkit-backdrop-filter: blur(20px);
+          backdrop-filter: blur(20px);
+  box-shadow: var(--sh-3);
+}
 .nv-pin-dots {
-  display: -webkit-box; display: flex;
-  -webkit-box-pack: center; justify-content: center;
-  gap: 22px; margin-bottom: 10px;
+  display: flex;
+  justify-content: center;
+  gap: 18px; margin-bottom: 12px;
 }
 .nv-pin-dots i {
-  width: 13px; height: 13px; border-radius: 50%;
-  border: 1.5px solid rgba(242,238,229,.55);
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,.55);
   display: block;
+  -webkit-transition: background .15s, border-color .15s;
+          transition: background .15s, border-color .15s;
 }
-.nv-pin-dots i.on { background: var(--paper); border-color: var(--paper); }
-.nv-pin-dots i.err { border-color: var(--cinnabar); background: rgba(192,63,45,.35); }
-.nv-pin-tip { text-align: center; font-size: 13px; color: var(--text-dim); height: 20px; margin-bottom: 18px; }
+.nv-pin-dots i.on { background: #fff; border-color: #fff; }
+.nv-pin-dots i.err { border-color: var(--danger); background: var(--danger); }
+.nv-pin-tip {
+  text-align: center; font-size: 12.5px; color: rgba(255,255,255,.72);
+  height: 20px; margin-bottom: 16px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
 .nv-pad {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
 }
 .nv-key {
-  height: 64px; border-radius: 50%;
-  border: 1px solid rgba(242,238,229,.18);
-  background: rgba(255,255,255,.05);
-  color: var(--text-light);
-  font-size: 24px; font-family: var(--serif);
+  height: 52px; border-radius: var(--r-md);
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.09);
+  color: #fff;
+  font-size: 21px; font-family: var(--sans); font-weight: 400;
   cursor: pointer;
-  -webkit-transition: background .12s; transition: background .12s;
+  -webkit-transition: background .12s, -webkit-transform .12s;
+          transition: background .12s, transform .12s;
 }
-.nv-key:active { background: rgba(255,255,255,.22); }
-.nv-key-fn { font-size: 13px; font-family: var(--sans); letter-spacing: .1em; color: var(--text-dim); }
+.nv-key:active { background: rgba(255,255,255,.26); -webkit-transform: scale(.96); transform: scale(.96); }
+.nv-key-fn {
+  font-size: 12px; color: rgba(255,255,255,.78);
+  background: rgba(255,255,255,.05);
+}
 .nv-lock-foot {
-  position: absolute; bottom: 26px; left: 0; right: 0;
+  position: absolute; bottom: 24px; left: 0; right: 0;
   text-align: center;
-  font-size: 11px; letter-spacing: .25em;
-  color: rgba(242,238,229,.35);
+  font-size: 11px; letter-spacing: .04em;
+  color: rgba(255,255,255,.34);
 }
 
 /* ================= 桌面 ================= */
-.nv-statusbar {
-  position: absolute; top: 0; left: 0; right: 0; height: 40px;
-  display: -webkit-box; display: flex;
-  -webkit-box-align: center; align-items: center;
-  padding: 0 14px;
-  font-size: 13px;
-  color: var(--text-dim);
-}
-.nv-sb-title { font-family: var(--serif); font-size: 15px; letter-spacing: .25em; color: var(--text-light); }
-.nv-sb-spacer { -webkit-box-flex: 1; flex: 1; }
-.nv-sb-btn {
-  margin-left: 12px;
-  width: 30px; height: 30px; border-radius: 50%;
-  border: 1px solid rgba(242,238,229,.25);
-  background: transparent; color: var(--text-light);
-  font-size: 13px; cursor: pointer;
-}
-.nv-sb-btn:active { background: rgba(255,255,255,.18); }
 
-/* 图标网格 */
+/* 状态栏：悬浮胶囊，不与壁纸硬切 */
+.nv-statusbar {
+  position: absolute; top: 10px; left: 10px; right: 10px; height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 6px 0 14px;
+  border-radius: var(--r-md);
+  background: rgba(16, 22, 33, .55);
+  border: 1px solid rgba(255,255,255,.10);
+  -webkit-backdrop-filter: blur(16px);
+          backdrop-filter: blur(16px);
+  font-size: 13px;
+  color: rgba(255,255,255,.86);
+  /* 必须高于普通窗口：否则窗口最大化后会把状态栏整条盖住，
+     用户点不到“回桌面/窗口/锁屏/返回”。WinBox 默认在 1e4 量级。 */
+  z-index: 20001;
+}
+.nv-sb-title {
+  font-size: 13.5px; font-weight: 600; letter-spacing: .01em;
+  color: #fff;
+}
+.nv-sb-spacer { flex: 1; }
+.nv-sb-clock { font-variant-numeric: tabular-nums; font-size: 13px; color: rgba(255,255,255,.9); margin-right: 10px; }
+.nv-sb-btn {
+  margin-left: 4px;
+  min-width: 34px; height: 30px; padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: none;
+  background: transparent; color: rgba(255,255,255,.88);
+  font-size: 12.5px; cursor: pointer;
+  -webkit-transition: background .12s; transition: background .12s;
+}
+.nv-sb-btn:active { background: rgba(255,255,255,.22); }
+
+/* 图标网格：间距更规整，图标改为扁平圆角方块 */
 .nv-icons {
-  position: absolute; top: 64px; left: 0; right: 0; bottom: 120px;
-  padding: 18px 22px;
+  position: absolute; top: 66px; left: 0; right: 0; bottom: 116px;
+  padding: 20px 24px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
-  grid-auto-rows: 92px;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  grid-auto-rows: 100px;
   align-content: start;
   justify-items: center;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
 .nv-app {
-  width: 78px;
-  display: -webkit-box; display: flex;
-  -webkit-box-orient: vertical; -webkit-box-direction: normal;
-          flex-direction: column;
-  -webkit-box-align: center; align-items: center;
+  width: 84px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   cursor: pointer;
-  padding: 4px 0;
+  padding: 6px 0;
 }
 .nv-app-icon {
-  width: 56px; height: 56px; border-radius: 16px;
-  display: -webkit-box; display: flex;
-  -webkit-box-align: center; align-items: center;
-  -webkit-box-pack: center; justify-content: center;
+  width: 56px; height: 56px; border-radius: var(--r-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 27px; line-height: 1;
   color: #fff;
-  background: linear-gradient(145deg, #2f3542, #20242d);
-  border: 1px solid rgba(255,255,255,.08);
-  box-shadow: 0 6px 14px rgba(0,0,0,.35);
+  background: #2b3039;
+  border: 1px solid rgba(255,255,255,.10);
+  box-shadow: var(--sh-2);
   -webkit-transition: -webkit-transform .12s; transition: transform .12s;
 }
-.nv-app:active .nv-app-icon { -webkit-transform: scale(.9); transform: scale(.9); }
-.nv-app-icon.tone-red { background: linear-gradient(145deg, #cf5340, #9c2f20); }
-.nv-app-icon.tone-gold { background: linear-gradient(145deg, #c8a765, #8f7236); }
-.nv-app-icon.tone-ink { background: linear-gradient(145deg, #3a4150, #20242d); }
+.nv-app:active .nv-app-icon { -webkit-transform: scale(.92); transform: scale(.92); }
+
+/* 应用色板：低饱和，统一明度，避免花哨 */
+.nv-app-icon.tone-red    { background: linear-gradient(155deg, #f26d5f, #d94a3d); }
+.nv-app-icon.tone-gold   { background: linear-gradient(155deg, #f0b429, #d99a1a); }
+.nv-app-icon.tone-blue   { background: linear-gradient(155deg, #4c8dff, #2f6bff); }
+.nv-app-icon.tone-ink    { background: linear-gradient(155deg, #4a5160, #2b3039); }
+.nv-app-icon.tone-green  { background: linear-gradient(155deg, #35c08b, #1fa971); }
+.nv-app-icon.tone-purple { background: linear-gradient(155deg, #9b7bf0, #7a5ad6); }
+
 .nv-app-name {
-  margin-top: 8px;
-  font-size: 12px;
-  color: rgba(242,238,229,.88);
-  text-shadow: 0 1px 3px rgba(0,0,0,.6);
-  max-width: 76px;
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: rgba(255,255,255,.92);
+  text-shadow: 0 1px 3px rgba(0,0,0,.45);
+  max-width: 82px;
   text-align: center;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 
-/* Dock */
+/* Dock：悬浮玻璃条 */
 .nv-dock-wrap {
-  position: absolute; bottom: 18px; left: 0; right: 0;
-  display: -webkit-box; display: flex;
-  -webkit-box-pack: center; justify-content: center;
+  position: absolute; bottom: 16px; left: 0; right: 0;
+  display: flex;
+  justify-content: center;
   pointer-events: none;
 }
 .nv-dock {
   pointer-events: auto;
-  display: -webkit-box; display: flex;
-  -webkit-box-align: center; align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: 22px;
-  background: rgba(22,24,30,.62);
-  border: 1px solid rgba(255,255,255,.09);
-  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-  box-shadow: 0 10px 30px rgba(0,0,0,.45);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--r-lg);
+  background: rgba(16, 22, 33, .55);
+  border: 1px solid rgba(255,255,255,.10);
+  -webkit-backdrop-filter: blur(16px);
+          backdrop-filter: blur(16px);
+  box-shadow: var(--sh-3);
   max-width: 92vw; overflow-x: auto;
 }
 .nv-dock-item {
   position: relative;
-  width: 46px; height: 46px; border-radius: 13px;
-  display: -webkit-box; display: flex;
-  -webkit-box-align: center; align-items: center;
-  -webkit-box-pack: center; justify-content: center;
-  font-size: 22px; color: #fff;
-  background: linear-gradient(145deg, #343b49, #23272f);
-  border: 1px solid rgba(255,255,255,.08);
+  width: 42px; height: 42px; border-radius: var(--r-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 21px; color: #fff;
+  background: #2b3039;
+  border: 1px solid rgba(255,255,255,.10);
   cursor: pointer;
   -webkit-transition: -webkit-transform .12s; transition: transform .12s;
 }
-.nv-dock-item:active { -webkit-transform: scale(.88); transform: scale(.88); }
+.nv-dock-item:active { -webkit-transform: scale(.9); transform: scale(.9); }
 .nv-dock-item.running::after {
-  content: ""; position: absolute; bottom: -6px; left: 50%;
-  margin-left: -3px; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--gold);
+  content: ""; position: absolute; bottom: -5px; left: 50%;
+  margin-left: -2.5px; width: 5px; height: 5px; border-radius: 50%;
+  background: rgba(230,234,240,.72);
 }
-.nv-dock-empty { color: var(--text-dim); font-size: 12px; padding: 0 10px; letter-spacing: .15em; }
+.nv-dock-empty { color: rgba(255,255,255,.62); font-size: 12px; padding: 0 12px; letter-spacing: .02em; }
 
 /* ================= 轻提示 ================= */
 .nv-toast {
@@ -226,7 +303,7 @@ button { font-family: inherit; }
   -webkit-transform: translateX(-50%); transform: translateX(-50%);
   max-width: 84vw;
   padding: 10px 18px;
-  border-radius: 10px;
+  border-radius: 2px;
   background: rgba(16,18,24,.92);
   border: 1px solid rgba(255,255,255,.1);
   color: var(--text-light);
@@ -237,163 +314,174 @@ button { font-family: inherit; }
 }
 
 /* ============================================================
-   WinBox 主题覆写（墨黑标题栏 / 圆角 / 大触控区）
+   窗口（WinBox 主题覆写）：细描边 + 柔和投影 + 紧凑标题栏
    ============================================================ */
 .winbox {
-  border-radius: 12px;
+  border-radius: var(--r-md);
   overflow: hidden;
-  background: var(--ink-2);
-  box-shadow: 0 22px 60px rgba(0,0,0,.55);
-  border: 1px solid rgba(255,255,255,.07);
-  transition: none;            // 窗口动画在老内核上可能掉帧
+  background: var(--paper);
+  box-shadow: var(--sh-3);
+  border: 1px solid rgba(16,24,40,.10);
+  transition: none;
   text-align: left;
 }
 .winbox .wb-header {
-  height: 44px; line-height: 44px;
-  background: linear-gradient(180deg, #232730, #1a1d24);
-  color: var(--text-light);
+  height: 40px; line-height: 40px;
+  background: var(--surface);
+  color: var(--text);
+  border-bottom: 1px solid var(--line);
 }
 .winbox .wb-drag { padding-left: 14px; cursor: move; }
-.winbox .wb-title { font-size: 14px; font-weight: 600; letter-spacing: .05em; }
+.winbox .wb-title { font-size: 13px; font-weight: 600; letter-spacing: 0; }
 .winbox .wb-body {
-  top: 44px;
+  top: 40px;
   background: var(--paper);
-  color: #26282d;
+  color: var(--text);
   margin: 0 !important;
 }
-.winbox .wb-control * { width: 40px; }        /* 加大关闭/最大化触控区 */
-.winbox.min { background: var(--ink-2); }
+.winbox .wb-control * { width: 40px; }
+.winbox .wb-control { color: var(--text-2); }
+.winbox.min { background: var(--paper); }
+/* 最大化：避开顶部状态栏（40px 高 + 10px 上边距），否则标题栏被压住不可拖拽 */
+.winbox.max { top: 60px !important; }
+.winbox.max .wb-header { cursor: default; }
 .winbox:focus, .winbox.focus { outline: none; }
+/* 非活动窗口：标题栏与投影同步减弱，焦点更明确 */
+.winbox:not(.focus) { box-shadow: var(--sh-2); }
+.winbox:not(.focus) .wb-header { background: #171b21; color: var(--text-3); }
 
 /* ============================================================
-   应用通用控件（.nv- 命名空间，避免与 WinBox 样式冲突）
+   应用通用控件（.nv- 命名空间）
    ============================================================ */
 .nv-wrap {
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-  display: -webkit-box; display: flex;
-  -webkit-box-orient: vertical; -webkit-box-direction: normal;
-          flex-direction: column;
+  display: flex;
+  flex-direction: column;
   background: var(--paper);
-  color: #26282d;
+  color: var(--text);
   font-size: 14px;
 }
 .nv-toolbar {
-  -webkit-box-flex: 0; flex: none;
-  display: -webkit-box; display: flex;
-  -webkit-box-align: center; align-items: center;
+  flex: none;
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 8px 10px;
-  background: #efe9dc;
-  border-bottom: 1px solid #ddd3bf;
+  padding: 9px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
 }
 .nv-btn {
-  border: 1px solid #cbbfa6;
-  background: #fbf8f1;
-  color: #3a3328;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--text);
   font-size: 13px;
   padding: 7px 13px;
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   cursor: pointer;
   line-height: 1.2;
+  -webkit-transition: background .12s, border-color .12s;
+          transition: background .12s, border-color .12s;
 }
-.nv-btn:active { background: #e7dfce; }
-.nv-btn.primary { background: var(--cinnabar); border-color: var(--cinnabar); color: #fff; }
-.nv-btn.primary:active { background: #a53323; }
+.nv-btn:active { background: var(--surface-2); }
+.nv-btn.primary {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.nv-btn.primary:active { background: var(--accent-press); border-color: var(--accent-press); }
 .nv-btn.ghost { background: transparent; }
-.nv-btn:disabled { opacity: .45; cursor: default; }
+.nv-btn:disabled { opacity: .42; cursor: default; }
 .nv-input, .nv-select {
-  border: 1px solid #cbbfa6;
-  background: #fffdf8;
-  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  border-radius: var(--r-sm);
   padding: 7px 10px;
   font-size: 13px;
-  color: #26282d;
+  color: var(--text);
   min-width: 0;
 }
-.nv-input:focus, .nv-select:focus { outline: none; border-color: var(--gold); }
+.nv-input:focus, .nv-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
 .nv-crumbs {
-  -webkit-box-flex: 1; flex: 1;
-  font-size: 12.5px; color: #6b6252;
+  flex: 1;
+  font-size: 12.5px; color: var(--text-2);
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   padding: 0 4px;
 }
 
-/* 分段选择（文件源等） */
-.nv-seg { display: -webkit-box; display: flex; border: 1px solid #cbbfa6; border-radius: 8px; overflow: hidden; }
+/* 分段选择 */
+.nv-seg { display: flex; border: 1px solid var(--line-strong); border-radius: var(--r-sm); overflow: hidden; }
 .nv-seg button {
-  border: none; background: #fbf8f1; color: #6b6252;
+  border: none; background: var(--paper); color: var(--text-2);
   font-size: 13px; padding: 7px 14px; cursor: pointer;
-  border-right: 1px solid #ddd3bf;
+  border-right: 1px solid var(--line);
 }
 .nv-seg button:last-child { border-right: none; }
-.nv-seg button.on { background: var(--ink-2); color: var(--paper); }
+.nv-seg button.on { background: var(--accent); color: #fff; }
 
 /* 列表 */
 .nv-list {
-  -webkit-box-flex: 1; flex: 1 1 auto;
+  flex: 1 1 auto;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   background: var(--paper);
 }
 .nv-row {
-  display: -webkit-box; display: flex;
-  -webkit-box-align: center; align-items: center;
-  padding: 11px 12px;
-  border-bottom: 1px solid #e8e0cf;
+  display: flex;
+  align-items: center;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
   cursor: pointer;
   min-height: 46px;
 }
-.nv-row:active { background: #efe8d8; }
-.nv-row-ico { width: 26px; text-align: center; font-size: 18px; -webkit-box-flex: 0; flex: none; }
+.nv-row:active { background: var(--surface); }
+.nv-row-ico { width: 26px; text-align: center; font-size: 18px; flex: none; }
 .nv-row-name {
-  -webkit-box-flex: 1; flex: 1;
+  flex: 1;
   margin: 0 10px;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-.nv-row-meta { font-size: 11.5px; color: #9a9079; -webkit-box-flex: 0; flex: none; }
+.nv-row-meta { font-size: 11.5px; color: var(--text-3); flex: none; }
 .nv-row-act {
-  -webkit-box-flex: 0; flex: none;
-  border: 1px solid #cbbfa6; background: #fbf8f1;
+  flex: none;
+  border: 1px solid var(--line-strong); background: var(--paper);
   border-radius: 6px; font-size: 12px;
   padding: 4px 9px; margin-left: 6px; cursor: pointer;
-  color: #5a5142;
+  color: var(--text-2);
 }
-.nv-row-act.danger { color: var(--cinnabar); border-color: #d9b3ab; }
+.nv-row-act.danger { color: var(--danger); border-color: #f0c9c6; }
 
 .nv-empty, .nv-loading {
   padding: 40px 20px; text-align: center;
-  color: #9a9079; font-size: 13px;
+  color: var(--text-3); font-size: 13px;
 }
 .nv-status-line {
-  -webkit-box-flex: 0; flex: none;
-  padding: 6px 12px; font-size: 12px; color: #7d7464;
-  background: #f1ebdd; border-top: 1px solid #ddd3bf;
+  flex: none;
+  padding: 6px 12px; font-size: 12px; color: var(--text-2);
+  background: var(--surface); border-top: 1px solid var(--line);
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 
-/* 弹层（连接表单/对话框） */
+/* 弹层 */
 .nv-mask {
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(20,18,14,.45);
+  background: rgba(16,24,40,.42);
   z-index: 50;
-  display: -webkit-box; display: flex;
-  -webkit-box-align: center; align-items: center;
-  -webkit-box-pack: center; justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .nv-dialog {
   width: 86%; max-width: 420px;
   background: var(--paper);
-  border-radius: 14px;
-  border: 1px solid #d8cdb4;
-  box-shadow: 0 18px 50px rgba(0,0,0,.4);
-  padding: 18px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  box-shadow: var(--sh-3);
+  padding: 20px;
 }
-.nv-dialog h3 { margin: 0 0 14px; font-size: 16px; font-weight: 700; }
-.nv-form-row { display: -webkit-box; display: flex; -webkit-box-align: center; align-items: center; margin-bottom: 10px; gap: 10px; }
-.nv-form-row label { width: 64px; -webkit-box-flex: 0; flex: none; font-size: 13px; color: #5a5142; }
-.nv-form-row .nv-input, .nv-form-row .nv-select { -webkit-box-flex: 1; flex: 1; width: 100%; }
-.nv-dialog-actions { display: -webkit-box; display: flex; -webkit-box-pack: end; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.nv-dialog h3 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
+.nv-form-row { display: flex; align-items: center; margin-bottom: 10px; gap: 10px; }
+.nv-form-row label { width: 64px; flex: none; font-size: 13px; color: var(--text-2); }
+.nv-form-row .nv-input, .nv-form-row .nv-select { flex: 1; width: 100%; }
+.nv-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
 /* 平板竖屏：窗口默认铺满大部分屏幕时仍保留留白 */
 @media (max-width: 560px) {
@@ -401,8 +489,7 @@ button { font-family: inherit; }
 }
 
 /* ============================================================
-   v2 框架：网络灯 / 多壁纸 / 任务视图 / 模态层 / Dock 活动态
-   Loshop & Cpt
+   桌面增强：网络状态灯 / 多壁纸 / 任务视图 / 顶层弹窗 / Dock 活动态
    ============================================================ */
 
 /* 状态栏网络灯：绿=电脑服务可达（同源或热点直连），灰=离线 */
@@ -417,23 +504,16 @@ button { font-family: inherit; }
   box-shadow: 0 0 7px rgba(88,193,109,.8);
 }
 
-/* 壁纸（纯 CSS 渐变，双类名提高优先级以覆盖默认底色） */
-.nv-lock.nv-wp-1, .nv-desktop.nv-wp-1 {
-  background:
-    radial-gradient(120% 90% at 80% -10%, #16363a 0%, rgba(22,54,58,0) 55%),
-    radial-gradient(100% 80% at 6% 112%, #1e3a2f 0%, rgba(30,58,47,0) 55%),
-    linear-gradient(160deg, #102326 0%, #0c1b1d 55%, #090f11 100%);
-}
-.nv-lock.nv-wp-2, .nv-desktop.nv-wp-2 {
-  background:
-    radial-gradient(120% 90% at 82% -12%, #3a2346 0%, rgba(58,35,70,0) 55%),
-    radial-gradient(100% 80% at 4% 112%, #43222e 0%, rgba(67,34,46,0) 55%),
-    linear-gradient(160deg, #211429 0%, #180f20 55%, #0e0913 100%);
-}
-.nv-lock.nv-wp-3, .nv-desktop.nv-wp-3 {
-  background:
-    radial-gradient(120% 90% at 76% -10%, #2c2f36 0%, rgba(44,47,54,0) 60%),
-    linear-gradient(160deg, #1b1d22 0%, #131419 55%, #0b0c0f 100%);
+/* 预设壁纸：各定义一组 --wp-a/--wp-b，供锁屏与桌面共用 */
+.nv-lock.nv-wp-0, .nv-desktop.nv-wp-0 { --wp-a: #2b3446; --wp-b: #0f1116; }
+.nv-lock.nv-wp-1, .nv-desktop.nv-wp-1 { --wp-a: #1d4d43; --wp-b: #0a1512; }
+.nv-lock.nv-wp-2, .nv-desktop.nv-wp-2 { --wp-a: #4a2b56; --wp-b: #120b18; }
+.nv-lock.nv-wp-3, .nv-desktop.nv-wp-3 { --wp-a: #343a46; --wp-b: #0d0f13; }
+.nv-lock.nv-wp-4, .nv-desktop.nv-wp-4 { --wp-a: #58402a; --wp-b: #16100a; }
+.nv-lock.nv-wp-5, .nv-desktop.nv-wp-5 { --wp-a: #26364f; --wp-b: #0a1220; }
+/* 自定义渐变：颜色由 os.js 覆盖到 --wp-a / --wp-b（写在元素内联样式上） */
+.nv-lock.nv-wp-custom, .nv-desktop.nv-wp-custom {
+  background-image: linear-gradient(160deg, var(--wp-a) 0%, var(--wp-b) 100%);
 }
 
 /* Dock 活动窗口 */
@@ -442,13 +522,13 @@ button { font-family: inherit; }
   box-shadow: 0 0 0 1px var(--gold), 0 8px 18px rgba(0,0,0,.4);
   -webkit-transform: translateY(-4px); transform: translateY(-4px);
 }
-.nv-dock-item.active::after { background: #e2c88a; }
+.nv-dock-item.active::after { background: var(--accent); }
 
 /* 顶层模态（挂 body，高于所有 WinBox 窗口） */
 .nv-modal-top { position: fixed; z-index: 100000; }
 .nv-dialog-msg {
   margin-bottom: 14px;
-  font-size: 14px; line-height: 1.75; color: #3a3328;
+  font-size: 14px; line-height: 1.75; color: var(--text);
   white-space: pre-line;
   word-break: break-all;
 }
@@ -458,8 +538,9 @@ button { font-family: inherit; }
 .nv-taskview {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
   z-index: 90000;
-  background: rgba(10,11,14,.88);
-  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  background: rgba(18,20,26,.72);
+  -webkit-backdrop-filter: blur(28px) saturate(130%);
+          backdrop-filter: blur(28px) saturate(130%);
   display: -webkit-box; display: flex;
   -webkit-box-orient: vertical; -webkit-box-direction: normal;
           flex-direction: column;
@@ -475,8 +556,8 @@ button { font-family: inherit; }
   margin-bottom: 14px;
 }
 .nv-taskview-title {
-  font-family: var(--serif); font-size: 20px; letter-spacing: .3em;
-  color: var(--text-light);
+  font-size: 17px; font-weight: 600; letter-spacing: 0;
+  color: #fff;
 }
 .nv-taskview-btns { -webkit-box-flex: 1; flex: 1; text-align: right; }
 .nv-tv-btn {
@@ -484,7 +565,7 @@ button { font-family: inherit; }
   border: 1px solid rgba(255,255,255,.22);
   background: rgba(255,255,255,.08);
   color: var(--text-light);
-  border-radius: 8px; font-size: 13px;
+  border-radius: var(--r-sm); font-size: 13px;
   padding: 7px 14px; cursor: pointer;
 }
 .nv-tv-btn:active { background: rgba(255,255,255,.2); }
@@ -501,17 +582,17 @@ button { font-family: inherit; }
 .nv-taskview-empty {
   grid-column: 1 / -1;
   padding: 80px 0; text-align: center;
-  color: var(--text-dim); font-size: 14px; letter-spacing: .2em;
+  color: rgba(255,255,255,.6); font-size: 14px;
 }
 .nv-tv-card {
-  border-radius: 12px;
-  background: rgba(32,35,43,.92);
-  border: 1px solid rgba(255,255,255,.1);
-  box-shadow: 0 10px 26px rgba(0,0,0,.4);
+  border-radius: var(--r-md);
+  background: rgba(255,255,255,.10);
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: var(--sh-2);
   cursor: pointer;
   overflow: hidden;
 }
-.nv-tv-card:active { background: rgba(46,50,61,.95); }
+.nv-tv-card:active { background: rgba(255,255,255,.18); }
 .nv-tv-card-top {
   display: -webkit-box; display: flex;
   -webkit-box-align: center; align-items: center;
@@ -519,7 +600,7 @@ button { font-family: inherit; }
 }
 .nv-tv-card-icon {
   -webkit-box-flex: 0; flex: none;
-  width: 44px; height: 44px; border-radius: 12px;
+  width: 44px; height: 44px; border-radius: 4px;
   display: -webkit-box; display: flex;
   -webkit-box-align: center; align-items: center;
   -webkit-box-pack: center; justify-content: center;
@@ -527,8 +608,8 @@ button { font-family: inherit; }
   background: linear-gradient(145deg, #3a4150, #20242d);
   border: 1px solid rgba(255,255,255,.08);
 }
-.nv-tv-card-icon.tone-red { background: linear-gradient(145deg, #cf5340, #9c2f20); }
-.nv-tv-card-icon.tone-gold { background: linear-gradient(145deg, #c8a765, #8f7236); }
+.nv-tv-card-icon.tone-red { background: linear-gradient(155deg, #f26d5f, #d94a3d); }
+.nv-tv-card-icon.tone-gold { background: linear-gradient(155deg, #f0b429, #d99a1a); }
 .nv-tv-card-info { -webkit-box-flex: 1; flex: 1; margin-left: 12px; min-width: 0; }
 .nv-tv-card-name {
   font-size: 15px; color: var(--text-light);
@@ -543,58 +624,61 @@ button { font-family: inherit; }
   cursor: pointer; font-size: 13px;
 }
 .nv-tv-card-x:active { background: rgba(255,255,255,.2); }
-.nv-tv-card-bar { height: 3px; background: var(--gold); opacity: .75; }
+.nv-tv-card-bar { height: 3px; background: var(--accent); opacity: .9; }
 
 /* ============================================================
    计算器
    ============================================================ */
 .nv-calc {
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-  display: -webkit-box; display: flex;
-  -webkit-box-orient: vertical; -webkit-box-direction: normal;
-          flex-direction: column;
-  background: #101218;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  color: var(--text);
 }
 .nv-calc-disp {
-  -webkit-box-flex: 0; flex: none;
-  padding: 18px 18px 12px;
+  flex: none;
+  padding: 22px 20px 14px;
   text-align: right;
 }
 .nv-calc-expr {
   min-height: 20px;
-  font-size: 14px; color: rgba(242,238,229,.5);
+  font-size: 13.5px; color: var(--text-3);
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   direction: rtl;
 }
 .nv-calc-main {
-  margin-top: 4px;
+  margin-top: 6px;
   font-size: 42px; line-height: 1.15;
-  font-family: var(--serif);
-  color: var(--text-light);
+  font-weight: 300;
+  color: var(--text);
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   direction: rtl;
 }
 .nv-calc-keys {
-  -webkit-box-flex: 1; flex: 1 1 auto;
+  flex: 1 1 auto;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   padding: 10px 12px 14px;
 }
 .nv-calc-key {
-  border: 1px solid rgba(255,255,255,.08);
-  border-radius: 12px;
-  background: #23272f;
-  color: var(--text-light);
-  font-size: 22px; font-family: var(--serif);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 21px; font-family: var(--sans);
   cursor: pointer;
-  -webkit-transition: background .1s; transition: background .1s;
+  -webkit-transition: background .1s, -webkit-transform .1s;
+          transition: background .1s, transform .1s;
 }
-.nv-calc-key:active { background: #333947; }
-.nv-calc-key.fn { background: #2f2a22; color: #e2c88a; font-family: var(--sans); font-size: 19px; }
-.nv-calc-key.op { background: #3a2b26; color: #f0b09f; font-size: 26px; }
-.nv-calc-key.eq { background: var(--cinnabar); border-color: var(--cinnabar); color: #fff; }
-.nv-calc-key.eq:active { background: #a53323; }
+.nv-calc-key:active { background: var(--surface-2); -webkit-transform: scale(.97); transform: scale(.97); }
+.nv-calc-key.fn { background: var(--surface); color: var(--text-2); font-size: 18px; }
+.nv-calc-key.op { background: var(--accent-weak); color: var(--accent); font-size: 24px; }
+.nv-calc-key.eq {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.nv-calc-key.eq:active { background: var(--accent-press); }
 
 /* ============================================================
    设置
@@ -602,77 +686,109 @@ button { font-family: inherit; }
 .nv-set {
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
   overflow-y: auto; -webkit-overflow-scrolling: touch;
-  background: #f1ebdd;
+  background: var(--surface);
   padding: 14px;
 }
 .nv-set-card {
-  background: #fffdf8;
-  border: 1px solid #ddd3bf;
-  border-radius: 12px;
-  padding: 14px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
   margin-bottom: 12px;
+  box-shadow: var(--sh-1);
 }
 .nv-set-card h4 {
   margin: 0 0 10px;
-  font-size: 14px; letter-spacing: .1em;
-  color: #8a6d3b;
-  font-family: var(--serif);
+  font-size: 13px; font-weight: 600; letter-spacing: .02em;
+  color: var(--text-2);
 }
 .nv-set-row {
-  display: -webkit-box; display: flex;
-  -webkit-box-align: center; align-items: center;
-  padding: 8px 0;
+  display: flex;
+  align-items: center;
+  padding: 9px 0;
   gap: 10px;
-  border-top: 1px dashed #e6ddc8;
-  font-size: 13.5px; color: #3a3328;
+  border-top: 1px solid var(--line);
+  font-size: 13.5px; color: var(--text);
+  flex-wrap: wrap;
 }
 .nv-set-row:first-of-type { border-top: none; }
-.nv-set-row .nv-set-k { -webkit-box-flex: 0; flex: none; min-width: 84px; color: #6b6252; }
-.nv-set-row .nv-set-v { -webkit-box-flex: 1; flex: 1; text-align: right; word-break: break-all; }
-.nv-set-input { width: min(100%, 220px); box-sizing: border-box; padding: 6px 8px; border: 1px solid #d5c9b2; border-radius: 6px; background: #fffdf8; color: #3a3328; }
-.nv-set-backup-panel { border-top: 1px solid #ddd3bf; margin-top: 8px; padding-top: 4px; }
+.nv-set-row .nv-set-k { flex: none; min-width: 84px; color: var(--text-2); }
+.nv-set-row .nv-set-v { flex: 1; text-align: right; word-break: break-all; }
+.nv-set-input {
+  width: min(100%, 220px); box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  background: var(--paper); color: var(--text); font-size: 13px;
+}
+.nv-set-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
+.nv-set-backup-panel { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
 .nv-restore-select { width: min(100%, 360px); margin-bottom: 6px; }
-.nv-restore-all { display: block; margin-top: 14px; color: #5b5346; font-size: 13px; }
-.nv-set-swatches { display: -webkit-box; display: flex; gap: 12px; padding-top: 4px; }
+.nv-restore-all { display: block; margin-top: 14px; color: var(--text-2); font-size: 13px; }
+.nv-set-swatches { display: flex; gap: 12px; padding: 4px 0 20px; flex-wrap: wrap; }
 .nv-wp-sw {
-  width: 46px; height: 46px; border-radius: 12px;
+  width: 48px; height: 48px; border-radius: 4px;
   border: 2px solid transparent;
   cursor: pointer;
   position: relative;
+  box-shadow: var(--sh-1);
 }
-.nv-wp-sw.sel { border-color: var(--cinnabar); }
+.nv-wp-sw.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
 .nv-wp-sw span {
-  position: absolute; bottom: -20px; left: 50%;
+  position: absolute; bottom: -19px; left: 50%;
   -webkit-transform: translateX(-50%); transform: translateX(-50%);
-  font-size: 11px; color: #6b6252; white-space: nowrap;
+  font-size: 11px; color: var(--text-3); white-space: nowrap;
 }
-.nv-wp-sw-0 { background: linear-gradient(160deg, #2a3140, #101218); }
-.nv-wp-sw-1 { background: linear-gradient(160deg, #1e3a2f, #090f11); }
-.nv-wp-sw-2 { background: linear-gradient(160deg, #3a2346, #0e0913); }
-.nv-wp-sw-3 { background: linear-gradient(160deg, #2c2f36, #0b0c0f); }
+.nv-wp-sw-0 { background: linear-gradient(160deg, #2b3446, #0f1116); }
+.nv-wp-sw-1 { background: linear-gradient(160deg, #1d4d43, #0a1512); }
+.nv-wp-sw-2 { background: linear-gradient(160deg, #4a2b56, #120b18); }
+.nv-wp-sw-3 { background: linear-gradient(160deg, #343a46, #0d0f13); }
+.nv-wp-sw-4 { background: linear-gradient(160deg, #58402a, #16100a); }
+.nv-wp-sw-5 { background: linear-gradient(160deg, #26364f, #0a1220); }
+/* 自定义渐变面板 */
+.nv-wp-custom-box {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.nv-wp-custom-box.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
+.nv-wp-pickers { display: flex; align-items: center; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+.nv-wp-lbl { font-size: 12px; color: var(--text-3); }
+.nv-wp-color {
+  width: 44px; height: 30px; padding: 0;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  background: transparent; cursor: pointer;
+}
+.nv-wp-preview {
+  height: 56px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+}
+.nv-wp-btns { display: flex; gap: 8px; margin-top: 12px; }
 .nv-set-bar {
-  height: 8px; border-radius: 4px; background: #e6ddc8;
+  height: 6px; border-radius: 3px; background: var(--surface-2);
   overflow: hidden; margin: 8px 0;
 }
 .nv-set-bar i {
   display: block; height: 100%;
-  background: linear-gradient(90deg, var(--gold), var(--cinnabar));
+  background: var(--accent);
 }
 .nv-set-about {
-  font-size: 12.5px; line-height: 2; color: #6b6252;
+  font-size: 12.5px; line-height: 1.9; color: var(--text-2);
 }
 .nv-set-hint {
-  font-size: 12px; line-height: 1.7; color: #8a806d; margin-top: 6px;
+  font-size: 12px; line-height: 1.7; color: var(--text-3); margin-top: 8px;
 }
-.nv-set-apps { font-size: 12.5px; color: #6b6252; line-height: 1.9; }
+.nv-set-apps { font-size: 12.5px; color: var(--text-2); line-height: 1.9; }
 
 /* ============ 媒体播放器 ============ */
 .nv-media {
   display: -webkit-box; display: flex;
   -webkit-box-orient: vertical; -webkit-box-direction: normal; flex-direction: column;
   height: 100%;
-  background: linear-gradient(170deg, #14161c, #1a1d26);
-  color: #e8e4da;
+  background: var(--ink);
+  color: var(--text);
   font-size: 13.5px;
   -webkit-user-select: none; user-select: none;
 }
@@ -701,11 +817,11 @@ button { font-family: inherit; }
 }
 .nv-media-stage video {
   max-width: 100%; max-height: 100%;
-  border-radius: 10px;
+  border-radius: 2px;
 }
 .nv-media-info {
   -webkit-flex: 0 0 auto; flex: 0 0 auto;
-  color: #8a8578; font-size: 13.5px;
+  color: var(--text-3); font-size: 13.5px;
   text-align: center; padding: 20px;
 }
 .nv-media-ctrl {
@@ -726,7 +842,7 @@ button { font-family: inherit; }
   width: 0%;
 }
 .nv-media-time {
-  font-size: 11.5px; color: #8a8578;
+  font-size: 11.5px; color: var(--text-3);
   margin-bottom: 8px;
 }
 .nv-media-btns {
@@ -748,7 +864,7 @@ button { font-family: inherit; }
 }
 .nv-media-list-title {
   padding: 6px 14px 2px;
-  font-size: 12px; color: #8a8578;
+  font-size: 12px; color: var(--text-3);
 }
 .nv-media-list {
   -webkit-box-flex: 1; flex: 1;
@@ -768,7 +884,7 @@ button { font-family: inherit; }
   -webkit-box-flex: 1; flex: 1;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.nv-media-row-size { flex: none; font-size: 11.5px; color: #8a8578; }
+.nv-media-row-size { flex: none; font-size: 11.5px; color: var(--text-3); }
 
 /* ============ 文件管理器（全功能版新增） ============ */
 /* 批量操作栏 */
@@ -788,9 +904,9 @@ button { font-family: inherit; }
   -webkit-box-align: center; align-items: center;
   padding: 8px 12px;
   gap: 8px;
-  background: #f1ebdd;
-  border-bottom: 1px solid #ddd3bf;
-  font-size: 12.5px; color: #6b6252;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px; color: var(--text-2);
   flex: none;
   -webkit-user-select: none; user-select: none;
 }
@@ -808,7 +924,7 @@ button { font-family: inherit; }
 /* 时间列 */
 .nv-row-time {
   -webkit-box-flex: 0; flex: none; width: 100px;
-  font-size: 11.5px; color: #6b6252; text-align: right;
+  font-size: 11.5px; color: var(--text-2); text-align: right;
 }
 /* 路径面包屑 */
 .nv-crumb {
@@ -834,7 +950,7 @@ button { font-family: inherit; }
 }
 .nv-img-preview img {
   max-width: 100%; max-height: 78vh;
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   box-shadow: 0 8px 32px rgba(0,0,0,.35);
 }
 .nv-img-cap {
@@ -863,11 +979,11 @@ button { font-family: inherit; }
   min-width: 0;
   height: 32px;
   padding: 0 10px;
-  border: 1px solid #cbbfa6;
-  border-radius: 8px;
-  background: #fffdf8;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--paper);
   font-size: 13.5px;
-  color: #26282d;
+  color: var(--text);
 }
 .nv-vb-addr:focus { outline: none; border-color: var(--gold); }
 /* 浏览器工具栏显式建立层叠层级：iframe 会被浏览器提升为独立合成层，
@@ -876,17 +992,17 @@ button { font-family: inherit; }
 .nv-vb-view {
   -webkit-box-flex: 1; flex: 1 1 auto;
   min-height: 0;
-  background: #fff;
+  background: var(--paper);
   position: relative;
   z-index: 0;
   overflow: hidden;
 }
 .nv-vb-frame {
   position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-  border: 0; display: block; background: #fff;
+  border: 0; display: block; background: var(--paper);
   z-index: 0;
 }
-/* 星标（收藏）：未收藏淡金，已收藏朱砂 */
+/* 星标（收藏）：已收藏时用强调色标示 */
 .nv-btn.star-on { border-color: var(--cinnabar); color: var(--cinnabar); }
 /* 收藏夹/历史 面板：只盖住网页视图区（在工具栏之下），不遮挡地址栏 */
 .nv-vb-panel {
@@ -900,10 +1016,10 @@ button { font-family: inherit; }
   display: -webkit-box; display: flex;
   -webkit-box-align: center; align-items: center;
   padding: 8px 10px;
-  border-bottom: 1px solid #e8e0cf;
-  background: #fbf8f1;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
-.nv-vb-panel-title { font-size: 14px; color: #3a3328; margin-right: 8px; }
+.nv-vb-panel-title { font-size: 14px; color: var(--text); margin-right: 8px; }
 .nv-vb-panel-body {
   -webkit-box-flex: 1; flex: 1 1 auto;
   overflow-y: auto;
@@ -913,34 +1029,34 @@ button { font-family: inherit; }
   display: -webkit-box; display: flex;
   -webkit-box-align: center; align-items: center;
   padding: 10px 12px;
-  border-bottom: 1px solid #e8e0cf;
+  border-bottom: 1px solid var(--line);
   cursor: pointer;
   min-height: 46px;
 }
-.nv-vb-item:active { background: #efe8d8; }
+.nv-vb-item:active { background: var(--surface-2); }
 .nv-vb-item-main {
   -webkit-box-flex: 1; flex: 1; min-width: 0;
   margin-right: 8px;
 }
 .nv-vb-item-title {
-  font-size: 13.5px; color: #26282d;
+  font-size: 13.5px; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .nv-vb-item-sub {
-  font-size: 11.5px; color: #6b6252;
+  font-size: 11.5px; color: var(--text-2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   margin-top: 2px;
 }
 .nv-vb-empty {
   padding: 28px 16px;
   text-align: center;
-  font-size: 13px; color: #6b6252;
+  font-size: 13px; color: var(--text-2);
 }
 
 /* ================= Phigros 模拟器（内嵌 sim-phi iframe） ================= */
 .nv-phi {
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-  background: #f1eff6;
+  background: var(--ink);
 }
 .nv-phi-frame {
   width: 100%; height: 100%;
@@ -949,12 +1065,12 @@ button { font-family: inherit; }
 /* Tzy 离线空间导入：悬浮按钮 + 选择浮层 */
 .nv-phi-import {
   position: absolute; top: 10px; right: 12px; z-index: 5;
-  border: 0; border-radius: 18px;
+  border: 0; border-radius: 4px;
   padding: 8px 16px;
   font: 14px/1.2 "Microsoft YaHei", sans-serif;
   color: #fff;
-  background: linear-gradient(135deg, #7c5cff, #b066ff);
-  box-shadow: 0 2px 8px rgba(60,30,120,.4);
+  background: var(--accent);
+  box-shadow: var(--sh-2);
 }
 .nv-phi-mask {
   position: absolute; inset: 0; z-index: 10;
@@ -968,7 +1084,7 @@ button { font-family: inherit; }
   width: 100%; max-width: 620px; max-height: 92%;
   display: -webkit-flex; display: flex; -webkit-flex-direction: column;
   flex-direction: column;
-  background: #f6f5fb; border-radius: 10px;
+  background: var(--surface); border-radius: 2px;
   box-shadow: 0 10px 40px rgba(0,0,0,.45);
   overflow: hidden;
   font: 14px/1.5 "Microsoft YaHei", sans-serif;
@@ -980,7 +1096,7 @@ button { font-family: inherit; }
   -webkit-align-items: center; align-items: center;
   -webkit-justify-content: space-between; justify-content: space-between;
   padding: 12px 16px; font-size: 16px; font-weight: bold;
-  background: #5b4b8a; color: #fff;
+  background: var(--accent); color: #fff;
 }
 .nv-phi-close {
   border: 0; background: transparent; color: #fff;
@@ -988,11 +1104,11 @@ button { font-family: inherit; }
 }
 .nv-phi-crumbs {
   -webkit-flex: 0 0 auto; flex: 0 0 auto;
-  padding: 8px 16px; font-size: 13px; color: #6c6480;
-  border-bottom: 1px solid #e3e0ee; background: #fff;
+  padding: 8px 16px; font-size: 13px; color: var(--text-2);
+  border-bottom: 1px solid #e3e0ee; background: var(--paper);
   word-break: break-all;
 }
-.nv-phi-crumb { color: #5b4b8a; cursor: pointer; }
+.nv-phi-crumb { color: var(--accent); cursor: pointer; }
 .nv-phi-list {
   -webkit-flex: 1 1 auto; flex: 1 1 auto;
   overflow: auto; -webkit-overflow-scrolling: touch;
@@ -1003,24 +1119,24 @@ button { font-family: inherit; }
   gap: 8px; padding: 10px 10px; border-radius: 6px;
 }
 .nv-phi-row.is-dir, .nv-phi-row:not(.nv-phi-up) { cursor: pointer; }
-.nv-phi-row:active { background: #e9e5f6; }
+.nv-phi-row:active { background: var(--surface-2); }
 .nv-phi-ic { -webkit-flex: 0 0 auto; flex: 0 0 auto; }
 .nv-phi-nm { -webkit-flex: 1 1 auto; flex: 1 1 auto;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.nv-phi-sz { -webkit-flex: 0 0 auto; flex: 0 0 auto; color: #9a93aa; font-size: 12px; }
+.nv-phi-sz { -webkit-flex: 0 0 auto; flex: 0 0 auto; color: var(--text-3); font-size: 12px; }
 .nv-phi-cb { width: 18px; height: 18px; -webkit-flex: 0 0 auto; flex: 0 0 auto; }
-.nv-phi-empty { padding: 26px; text-align: center; color: #9a93aa; }
+.nv-phi-empty { padding: 26px; text-align: center; color: var(--text-3); }
 .nv-phi-prog {
   -webkit-flex: 0 0 auto; flex: 0 0 auto;
   padding: 8px 16px; font-size: 13px; color: #8a5a00;
-  background: #fff7e6; border-top: 1px solid #f0e2c0;
+  background: var(--paper)7e6; border-top: 1px solid #f0e2c0;
   word-break: break-all;
 }
 .nv-phi-foot {
   -webkit-flex: 0 0 auto; flex: 0 0 auto;
   display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap;
   gap: 8px; padding: 12px 16px;
-  border-top: 1px solid #e3e0ee; background: #fff;
+  border-top: 1px solid var(--line); background: var(--paper);
 }
 
 /* ============ 文档查看器（preview 应用） ============ */
@@ -1034,13 +1150,13 @@ button { font-family: inherit; }
   flex-direction: column; -webkit-align-items: center; align-items: center; gap: 12px; }
 .nv-pv-page {
   max-width: 100%;
-  background: #fff;
+  background: var(--paper);
   box-shadow: 0 2px 10px rgba(0,0,0,.18);
   border-radius: 2px;
 }
 .nv-pv-doc {
   max-width: 820px; margin: 0 auto;
-  background: #fff; color: #1f2329;
+  background: var(--paper); color: var(--text);
   padding: 40px 46px;
   box-shadow: 0 2px 10px rgba(0,0,0,.15);
   border-radius: 3px;
@@ -1057,17 +1173,17 @@ button { font-family: inherit; }
 .nv-pv-slides { max-width: 860px; margin: 0 auto; display: -webkit-flex;
   display: flex; -webkit-flex-direction: column; flex-direction: column; gap: 16px; }
 .nv-pv-slide {
-  background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.15);
+  background: var(--paper); box-shadow: 0 2px 10px rgba(0,0,0,.15);
   border-radius: 3px; padding: 0 0 18px; overflow: hidden;
 }
 .nv-pv-slide-no {
-  background: #5b4b8a; color: #fff; font-size: 13px;
+  background: var(--accent); color: #fff; font-size: 13px;
   padding: 7px 16px;
 }
 .nv-pv-slide-body { padding: 20px 26px 6px; }
-.nv-pv-line { font: 16px/1.7 "Microsoft YaHei", sans-serif; color: #1f2329; margin: 3px 0; }
+.nv-pv-line { font: 16px/1.7 "Microsoft YaHei", sans-serif; color: var(--text); margin: 3px 0; }
 .nv-pv-img { display: block; max-width: 92%; margin: 10px auto 0; }
-.nv-pv-table { border-collapse: collapse; margin: 0 auto; background: #fff;
+.nv-pv-table { border-collapse: collapse; margin: 0 auto; background: var(--paper);
   font: 13px/1.5 "Microsoft YaHei", sans-serif; }
 .nv-pv-table td { border: 1px solid #c9cdd4; padding: 3px 10px; white-space: pre-wrap;
   max-width: 360px; vertical-align: top; }
@@ -1077,49 +1193,49 @@ button { font-family: inherit; }
   flex: 1 1 auto; }
 .nv-store-tab {
   border: 0; background: transparent; padding: 6px 12px;
-  font: 14px/1.4 "Microsoft YaHei", sans-serif; color: #5b5470;
-  border-radius: 14px; cursor: pointer;
+  font: 14px/1.4 "Microsoft YaHei", sans-serif; color: var(--text-2);
+  border-radius: 4px; cursor: pointer;
 }
-.nv-store-tab.active { background: #5b4b8a; color: #fff; }
+.nv-store-tab.active { background: var(--accent); color: #fff; }
 .nv-store-view { -webkit-flex: 1 1 auto; flex: 1 1 auto; overflow: auto;
   -webkit-overflow-scrolling: touch; padding: 12px 14px; }
 .nv-store-hint { font-size: 12px; color: #8a849a; margin: 0 2px 10px; line-height: 1.6;
   white-space: pre-wrap; }
-.nv-store-card { background: #fff; border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;
+.nv-store-card { background: var(--paper); border-radius: var(--r-sm); padding: 12px 14px; margin-bottom: 10px;
   box-shadow: 0 1px 4px rgba(60,40,110,.08); }
 .nv-store-card-hd { display: -webkit-flex; display: flex;
   -webkit-align-items: center; align-items: center; gap: 12px; }
 .nv-store-ic {
   -webkit-flex: 0 0 auto; flex: 0 0 auto;
-  width: 42px; height: 42px; border-radius: 10px;
+  width: 42px; height: 42px; border-radius: 2px;
   display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center;
   -webkit-justify-content: center; justify-content: center;
   font-size: 22px; color: #fff;
 }
 .nv-store-ic-img { -o-object-fit: cover; object-fit: cover; }
-.nv-store-title { font: 15px/1.4 "Microsoft YaHei", sans-serif; color: #2b2538; }
-.nv-store-sub { font-size: 12px; color: #928ba3; margin-top: 2px; }
-.nv-store-desc { margin-top: 8px; font-size: 13px; color: #6c6480; line-height: 1.6;
+.nv-store-title { font: 15px/1.4 "Microsoft YaHei", sans-serif; color: var(--text); }
+.nv-store-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.nv-store-desc { margin-top: 8px; font-size: 13px; color: var(--text-2); line-height: 1.6;
   white-space: pre-wrap; word-break: break-word; }
-.nv-store-tag { margin-left: auto; font-size: 12px; color: #928ba3;
-  border: 1px solid #d8d3e6; border-radius: 10px; padding: 3px 10px; }
+.nv-store-tag { margin-left: auto; font-size: 12px; color: var(--text-3);
+  border: 1px solid var(--line); border-radius: 2px; padding: 3px 10px; }
 .nv-store-btn { margin-left: auto; -webkit-flex: 0 0 auto; flex: 0 0 auto; }
-.nv-store-crumbs { font-size: 13px; color: #6c6480; margin: 2px 2px 8px;
-  background: #fff; border-radius: 6px; padding: 8px 12px; word-break: break-all; }
-.nv-store-crumb { color: #5b4b8a; cursor: pointer; }
-.nv-store-local-list { background: #fff; border-radius: 8px; overflow: hidden; }
+.nv-store-crumbs { font-size: 13px; color: var(--text-2); margin: 2px 2px 8px;
+  background: var(--paper); border-radius: 6px; padding: 8px 12px; word-break: break-all; }
+.nv-store-crumb { color: var(--accent); cursor: pointer; }
+.nv-store-local-list { background: var(--paper); border-radius: var(--r-sm); overflow: hidden; }
 .nv-store-row { display: -webkit-flex; display: flex; -webkit-align-items: center;
   align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #f0edf7;
   cursor: pointer; font: 14px/1.4 "Microsoft YaHei", sans-serif; }
-.nv-store-row:active { background: #f0ecfa; }
-.nv-store-row.is-pkg { background: #faf8ff; }
+.nv-store-row:active { background: var(--surface-2); }
+.nv-store-row.is-pkg { background: var(--surface); }
 .nv-store-ric { -webkit-flex: 0 0 auto; flex: 0 0 auto; }
 .nv-store-rnm { -webkit-flex: 1 1 auto; flex: 1 1 auto; overflow: hidden;
   white-space: nowrap; text-overflow: ellipsis; }
-.nv-store-rsz { -webkit-flex: 0 0 auto; flex: 0 0 auto; color: #9a93aa; font-size: 12px; }
-.nv-store-up { color: #6c6480; }
+.nv-store-rsz { -webkit-flex: 0 0 auto; flex: 0 0 auto; color: var(--text-3); font-size: 12px; }
+.nv-store-up { color: var(--text-2); }
 
-/* ============ 媒体播放器：视频插槽 + LRC 歌词（v1.1.0，Loshop & Cpt） ============ */
+/* ============ 媒体播放器：视频插槽 + LRC 歌词（v1.1.0，） ============ */
 .nv-media-video-slot {
   -webkit-box-flex: 1; flex: 1 1 auto;
   width: 100%; min-height: 0;
@@ -1136,13 +1252,13 @@ button { font-family: inherit; }
 }
 .nv-lrc-line {
   padding: 8px 6px; text-align: center;
-  font-size: 14.5px; line-height: 1.55; color: #aaa6bc;
+  font-size: 14.5px; line-height: 1.55; color: var(--text-3);
   -webkit-transition: color .15s; transition: color .15s;
 }
-.nv-lrc-line.dim { color: #c4c1d0; }
-.nv-lrc-line.on { color: #5b3fd6; font-weight: 600; font-size: 16px; }
+.nv-lrc-line.dim { color: var(--text-2); }
+.nv-lrc-line.on { color: var(--accent); font-weight: 600; font-size: 16px; }
 
-/* ============ 开发终端（devterm，v1.0.0，Loshop & Cpt） ============ */
+/* ============ 维护终端（devterm） ============ */
 .nv-term {
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
   display: -webkit-box; display: flex;
@@ -1227,7 +1343,7 @@ button { font-family: inherit; }
 .nv-term-input {
   -webkit-box-flex: 1; flex: 1 1 auto;
   background: #14161b; border: 1px solid #2a2e38; color: #e8e2d4;
-  border-radius: 8px; padding: 8px 10px;
+  border-radius: var(--r-sm); padding: 8px 10px;
   font-family: Consolas, "Courier New", monospace; font-size: 13px;
   min-width: 0;
 }

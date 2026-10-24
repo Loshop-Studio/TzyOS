@@ -562,7 +562,6 @@ input[type="number"]::-webkit-outer-spin-button,input[type="number"]::-webkit-in
  * 1) 已剥离 AI 相关功能（划词提问/对话/设置，均依赖外网大模型 API）；
  * 2) 运行于 Tzy OS 应用 iframe 中：路由改为内部状态机（不再写 history），
  *    日志与未捕获异常转发给 OS 外壳，便于调试；
- * Loshop & Cpt
  * ============================================================ */
 (function () {
   function post(level, msg) {
@@ -1730,7 +1729,7 @@ function scheduleHideControls() {
  * 在 Tzy OS 内运行时（同源 iframe），导入走系统文件管理器：OS.pickFile()
  * 打开「文件」应用的选择模式，返回 {source,path,name}，再按来源读取字节流，
  * 包装成 File 交给 importFile。独立打开（没有 OS 宿主）时退回原生选择框。
- * Loshop & Cpt */
+ **/
 function osHost() {
   try {
     const w = window.parent;

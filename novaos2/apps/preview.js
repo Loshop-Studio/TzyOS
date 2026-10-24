@@ -7,7 +7,6 @@
  *   doc/ppt/xls 旧二进制格式不支持渲染，提示并提供下载
  * 依赖（nova.html 已引入，均自托管离线可用）：
  *   lib/preview/pdf.min.js(+worker)、mammoth.browser.min.js、jszip.min.js
- * Loshop & Cpt
  * ============================================================ */
 (function () {
   "use strict";

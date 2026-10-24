@@ -6,7 +6,7 @@
 <title>画板 · Tzy OS</title>
 <link rel="stylesheet" href="core/quickdraw.css?v=1791595790" />
 <style>
-  /* Tzy OS 画板外壳（Loshop & Cpt）。引擎样式见 core/quickdraw.css */
+  /* Tzy OS 画板外壳。引擎样式见 core/quickdraw.css */
   html, body { margin: 0; height: 100%; overflow: hidden;
     font-family: "Microsoft YaHei", system-ui, sans-serif; }
   #board { position: fixed; inset: 0; }
@@ -109,7 +109,7 @@
 
   <script>
   /* roundRect 兜底：Chromium 99 才内置，更旧内核没有，补一个等效实现。
-     与规范同名同参，引擎原有调用无需改动。Loshop & Cpt */
+     与规范同名同参，引擎原有调用无需改动。 */
   (function () {
     if (typeof CanvasRenderingContext2D !== "undefined" &&
         !CanvasRenderingContext2D.prototype.roundRect) {

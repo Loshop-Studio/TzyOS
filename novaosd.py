@@ -3,7 +3,7 @@
 运行方式二选一：
     runtime\\python\\python.exe novaosd.py   （内嵌便携运行时，Win7/10/11 通用）
     python novaosd.py                        （系统 Python）
-Loshop & Cpt"""
+"""
 import os
 import sys
 

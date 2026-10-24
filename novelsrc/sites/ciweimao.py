@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """刺猬猫（ciweimao.com）—— 由 go-novel-dl internal/site/ciweimao.go 移植。
 正文为 AES-CBC 双层解密，纯 Python 实现（pycryptodome 已在目标运行时内置）。
-Loshop & Cpt
 """
 import base64
 import imghdr

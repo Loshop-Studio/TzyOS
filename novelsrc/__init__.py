@@ -10,7 +10,6 @@
 
 纯 Python 3.8 兼容（Windows 7 可用），依赖 requests + beautifulsoup4 + lxml
 （加密站点另需 pycryptodome / cryptography，EPUB 导出需 ebooklib）。
-Loshop & Cpt
 """
 from .base import (SITES, Site, all_sites, apply_chapter_range, dedup_chapters,
                    get_site, register, site_keys)

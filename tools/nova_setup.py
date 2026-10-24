@@ -6,7 +6,7 @@ Usage:
     python nova_setup.py --mode 2    LAN proxy mode
     python nova_setup.py --check     preflight checks only
     python nova_setup.py --deps      install python dependencies only
-Loshop & Cpt"""
+"""
 import argparse
 import ctypes
 import json

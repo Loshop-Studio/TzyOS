@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """笔趣阁（xbiquge345.com）—— 由 go-novel-dl internal/site/biquge345.go 移植。
-Loshop & Cpt
 """
 import re
 import time

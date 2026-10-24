@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """布谷小说网（buguxs.com）—— 由 go-novel-dl internal/site/buguxs.go +
 buguxs_decrypt.go 移植。var c 的 php_decrypt_js 解密用纯 Python 复刻。
-Loshop & Cpt
 """
 import base64
 import re

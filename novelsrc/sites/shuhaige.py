@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """书海阁小说网（shuhaige.net）—— 由 go-novel-dl internal/site/shuhaige.go 移植。
-Loshop & Cpt
 """
 import re
 from urllib.parse import urlsplit

@@ -6,7 +6,7 @@
   GET /__nova__/api/music/url?src=...&id=...          默认 302 到真实音频（audio 标签用）
   GET /__nova__/api/music/url?src=...&id=...&dl=1     电脑流式转发音频字节（下载/兜底用）
   GET /__nova__/api/music/lyric?src=...&id=...        {ok, lyric}
-Loshop & Cpt"""
+"""
 import base64
 import json
 import random

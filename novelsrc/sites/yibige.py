@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """一笔阁（yibige.org）—— 由 go-novel-dl internal/site/yibige.go 移植。
-Loshop & Cpt
 """
 import re
 from concurrent.futures import ThreadPoolExecutor

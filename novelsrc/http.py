@@ -3,7 +3,6 @@
 
 对应 go-novel-dl 的 site/httpclient.go + htmlutil.go 的抓取部分：
 统一 UA / Accept-Language、可重试错误判定、退避重试、GBK 等中文站字符集嗅探。
-Loshop & Cpt
 """
 import re
 import time

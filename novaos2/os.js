@@ -1,10 +1,9 @@
 /* ============================================================
  * Tzy OS · 核心 os.js
- * 锁屏 → 桌面图标网格 + Dock → WinBox 窗口 → 应用注册 → 存储
+ * 锁屏 → 桌面图标网格 + Dock → 窗口 → 应用注册 → 存储
  *
- * 约束：Chrome 99（华为平板）、HTTP 非安全源；
- *      仅用 ES6（不使用 2022+ 语法）；存储只用 localStorage 明文。
- * Loshop & Cpt
+ * 约束：需兼容 Chrome 99 内核的平板浏览器与 HTTP 非安全源；
+ *      仅用 ES6 语法；本地存储为明文。
  * ============================================================ */
 (function () {
   "use strict";
@@ -174,39 +173,103 @@
     }
   };
 
-  /* ---------------- 界面设置（壁纸等，明文 localStorage） ---------------- */
+  /* ---------------- 界面设置（壁纸等，明文 localStorage） ----------------
+   * 壁纸分两类：
+   *   预设  以 .nv-wp-N 类名切换，颜色写在 CSS 里；
+   *   自定义 以 .nv-wp-custom + 两个内联变量 --wp-a/--wp-b 实现任意双色渐变。
+   * 两者都同时作用于锁屏与桌面，保证切换后观感一致。 */
   var UI_KEY = "nova2.ui";
+
+  var OS_VERSION = "2.0.0";
+  var OS_BUILD = "20261024";
+
   var WALLPAPERS = [
-    { id: 0, name: "墨" },
-    { id: 1, name: "青黛" },
-    { id: 2, name: "绛紫" },
-    { id: 3, name: "玄铁" }
+    { id: 0, name: "石墨" },
+    { id: 1, name: "松墨" },
+    { id: 2, name: "玄紫" },
+    { id: 3, name: "铁灰" },
+    { id: 4, name: "深棕" },
+    { id: 5, name: "夜蓝" }
   ];
-  function uiGet() { return Store.get(UI_KEY, { wp: 0 }) || { wp: 0 }; }
-  function applyWallpaper(idx) {
+  var CUSTOM_ID = 100;          // 自定义壁纸在设置里的标识
+
+  function uiGet() {
+    var s = Store.get(UI_KEY, null);
+    if (!s || typeof s !== "object") s = { wp: 0 };
+    return s;
+  }
+  function uiSet(patch) {
+    var s = uiGet();
+    for (var k in patch) s[k] = patch[k];
+    Store.set(UI_KEY, s);
+  }
+
+  function wallpaperTargets() {
+    var out = [];
     var lock = document.getElementById("nv-lock");
     var desk = document.getElementById("nv-desktop");
-    WALLPAPERS.forEach(function (w) {
-      if (lock) lock.classList.remove("nv-wp-" + w.id);
-      if (desk) desk.classList.remove("nv-wp-" + w.id);
-    });
-    if (lock) lock.classList.add("nv-wp-" + idx);
-    if (desk) desk.classList.add("nv-wp-" + idx);
+    if (lock) out.push(lock);
+    if (desk) out.push(desk);
+    return out;
   }
+
+  // 应用壁纸：idx 为预设 id，或 CUSTOM_ID 表示用渐变
+  function applyWallpaper(idx, colors) {
+    var targets = wallpaperTargets();
+    var isCustom = (idx === CUSTOM_ID);
+    var c = colors || uiGet().wpColors || null;
+
+    targets.forEach(function (el) {
+      WALLPAPERS.forEach(function (w) { el.classList.remove("nv-wp-" + w.id); });
+      el.classList.remove("nv-wp-custom");
+      el.classList.add(isCustom ? "nv-wp-custom" : ("nv-wp-" + idx));
+      if (isCustom && c && c[0] && c[1]) {
+        el.style.setProperty("--wp-a", c[0]);
+        el.style.setProperty("--wp-b", c[1]);
+      } else {
+        el.style.removeProperty("--wp-a");
+        el.style.removeProperty("--wp-b");
+      }
+    });
+  }
+
+  // 供设置页实时预览（不落盘）
+  function previewWallpaper(idx, colors) {
+    applyWallpaper(idx, colors);
+  }
+
   var ui = {
     wallpapers: function () { return WALLPAPERS.slice(); },
+    customId: function () { return CUSTOM_ID; },
     wallpaper: function () {
-      var n = uiGet().wp;
-      return WALLPAPERS[n] ? n : 0;
+      var s = uiGet();
+      if (s.wp === CUSTOM_ID) return CUSTOM_ID;
+      return WALLPAPERS[s.wp] ? s.wp : 0;
     },
-    setWallpaper: function (idx) {
+    wallpaperColors: function () {
+      var c = uiGet().wpColors;
+      return (c && c[0] && c[1]) ? [c[0], c[1]] : ["#2b3446", "#0f1116"];
+    },
+    setWallpaper: function (idx, colors) {
+      if (idx === CUSTOM_ID) {
+        var a = (colors && colors[0]) || "#2b3446";
+        var b = (colors && colors[1]) || "#0f1116";
+        uiSet({ wp: CUSTOM_ID, wpColors: [a, b] });
+        applyWallpaper(CUSTOM_ID, [a, b]);
+        return;
+      }
       if (!WALLPAPERS[idx]) return;
-      var s = uiGet(); s.wp = idx; Store.set(UI_KEY, s);
+      uiSet({ wp: idx });
       applyWallpaper(idx);
+    },
+    preview: previewWallpaper,
+    restore: function () {
+      var idx = ui.wallpaper();
+      applyWallpaper(idx, idx === CUSTOM_ID ? ui.wallpaperColors() : null);
     }
   };
 
-  /* ---------------- 网络层：同源 → 直连热点 IP，自动探测与故障转移 ----------------
+  /* ---------------- 网络层：同源 → 直连热点 IP，自动探测与故障转移 ----------------  /* ---------------- 网络层：同源 → 直连热点 IP，自动探测与故障转移 ----------------
    * 劫持在：同源相对路径 api/... 即达 server.py。
    * 断劫持：域名失效，但平板仍连着电脑热点 → 直连 http://192.168.137.1 挂载点
    *         （跨域，服务端已开 CORS + 预检），FTP/SMB/外网代取全部继续可用。
@@ -1922,7 +1985,7 @@
     return vfsMaint.persistP;
   }
 
-  /* ---------- 引擎一：localStorage 降级实现（旧版结构，约 5MB） ---------- */
+  /* ---------- 引擎一：localStorage 降级实现（容量约 5MB，IDB 不可用时使用） ---------- */
   function vfsLoad() { return Store.get(VFS_KEY, null) || { dirs: { "": 1 }, files: {} }; }
   function vfsSave(t) {
     try { Store.set(VFS_KEY, t); return { ok: true }; }
@@ -2481,7 +2544,6 @@
    *   <main>     入口脚本：加载后自行调用 OS.registerApp({...})
    *   其他文件   应用资源，运行时 OS.pkg.assetUrl(id, rel) 取 blob 网址
    * 安装位置：离线空间 /apps/<id>/；注册表：localStorage nova2.apps
-   * Loshop & Cpt
    * ============================================================ */
   var APPS_KEY = "nova2.apps";
   var APPS_ROOT = "/apps";
@@ -3053,10 +3115,35 @@
 
   function winSize() {
     var w = window.innerWidth, hh = window.innerHeight;
-    // 平板竖屏：接近全屏；桌面：适中窗口
-    var ww = Math.min(w - 24, w < 700 ? w - 16 : 820);
-    var wh = Math.min(hh - 96, w < 700 ? hh - 120 : 580);
+    // 窄屏（平板竖屏）几乎铺满，仅留状态栏与 Dock 的空间；
+    // 宽屏用固定上限，避免窗口过大导致内容拉伸。
+    var ww, wh;
+    if (w < 700) {
+      ww = Math.max(280, w - 16);
+      wh = Math.max(320, hh - 132);
+    } else {
+      ww = Math.min(w - 24, 860);
+      wh = Math.min(hh - 96, 600);
+    }
     return { w: ww, h: wh };
+  }
+
+  /* 双击窗口标题栏 → 最大化/还原。
+   * WinBox 自带 maximize()，但平板很难精确点到右上角按钮；
+   * 双击标题栏是更符合桌面习惯的手势。仅绑定一次，避免重复叠加。 */
+  function bindHeaderDblClick(wb, id) {
+    try {
+      var el = wb && wb.body ? wb.body.parentNode : null;   // .winbox
+      if (!el) return;
+      var header = el.querySelector(".wb-header");
+      if (!header || header.getAttribute("data-dblclick") === "1") return;
+      header.setAttribute("data-dblclick", "1");
+      header.addEventListener("dblclick", function (e) {
+        // 点在关闭/最大化按钮上时交给按钮自己处理
+        if (e.target && e.target.closest && e.target.closest(".wb-control")) return;
+        try { wb.maximize ? wb.maximize() : null; } catch (err) { }
+      });
+    } catch (e) { }
   }
 
   /* ---------------- 窗口降级容器 ----------------
@@ -3271,6 +3358,7 @@
     });
     rec.win = wb;
     activeId = id;
+    bindHeaderDblClick(wb, id);        // 双击标题栏最大化/还原
     if (rec.def.maximize) { try { wb.maximize(); } catch (e) { } }
     if (rec.def.onArg) {
       try { rec.def.onArg(rec.root, arg); }
@@ -3468,12 +3556,25 @@
     taskViewEl = ov;
 
     bExit.addEventListener("click", closeTaskView);
+    // 点空白处或按 Esc 关闭，符合桌面习惯
     ov.addEventListener("click", function (e) { if (e.target === ov) closeTaskView(); });
+    ov.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" || e.keyCode === 27) { e.preventDefault(); closeTaskView(); }
+    });
+    try { ov.tabIndex = -1; ov.focus({ preventScroll: true }); } catch (e) { }
     bCloseAll.addEventListener("click", function () {
       runningList().slice().forEach(closeApp);
       closeTaskView();
     });
   }
+  // 全局 Esc：任务视图打开时优先关闭它
+  document.addEventListener("keydown", function (e) {
+    if ((e.key === "Escape" || e.keyCode === 27) && taskViewEl) {
+      e.preventDefault();
+      closeTaskView();
+    }
+  });
+
   function closeTaskView() {
     if (taskViewEl) {
       if (taskViewEl.parentNode) taskViewEl.parentNode.removeChild(taskViewEl);
@@ -3548,11 +3649,25 @@
     });
   }
 
-  /* ---------------- 锁屏 ---------------- */
+  /* ---------------- 锁屏 ----------------
+   * 密码为 4 位数字，存 localStorage（明文，仅本机离线屏保用途）。
+   * 状态机（pinMode）：
+   *   check      待验证，输入满 4 位即比对
+   *   set-old    改密码：先验原密码
+   *   set-new    设/改：输入新密码
+   *   set-again  设/改：再次确认
+   *   remove-old 关闭密码：验原密码后清除
+   * 设计要点：
+   *   1. 任何模式切换都复位输入与提示，避免串状态；
+   *   2. 输错后短暂锁定输入，防止快速连按把 4 位输成 8 位；
+   *   3. 无密码时键盘隐藏，点空白处进入；有密码时点空白不进入；
+   *   4. 设密码全程可用“取消”退出，回到验证态。 */
   var PIN_KEY = "nova2.pin";
   var pinInput = "";
-  var pinMode = "check";        // check / set-new / set-again / set-old
-  var pinStage = "";             // 暂存第一次输入的新 PIN
+  var pinMode = "check";
+  var pinStage = "";
+  var pinBusy = false;      // 校验中/错误展示中，暂停接受输入
+  var pinTimer = 0;
 
   function pad(n) { return (n < 10 ? "0" : "") + n; }
   function tickClock() {
@@ -3560,7 +3675,7 @@
     var hm = pad(d.getHours()) + ":" + pad(d.getMinutes());
     var week = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
     var dateStr = d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() +
-                  "日 · 星期" + week;
+                  "日 星期" + week;
     var c1 = document.getElementById("nv-clock");
     var c2 = document.getElementById("nv-date");
     var c3 = document.getElementById("nv-sb-clock");
@@ -3569,122 +3684,219 @@
     if (c3) c3.textContent = hm;
   }
 
+  function hasPin() { return !!Store.get(PIN_KEY, ""); }
+
   function enterDesktop() {
     document.getElementById("nv-lock").classList.add("nv-hidden");
     document.getElementById("nv-desktop").classList.remove("nv-hidden");
   }
   function lockScreen() {
-    // 关闭所有窗口前先复位锁屏状态
     for (var k in apps) {
       if (apps[k].win) { try { apps[k].win.close(); } catch (e) { } }
     }
-    pinInput = ""; pinMode = "check"; pinStage = "";
-    renderPinDots();
-    setPinTip("请输入锁屏密码");
+    resetPinState();
     document.getElementById("nv-lock").classList.remove("nv-hidden");
     document.getElementById("nv-desktop").classList.add("nv-hidden");
   }
 
+  // 复位到“验证密码”初始态（切模式、锁屏、取消时都走这里）
+  function resetPinState() {
+    if (pinTimer) { clearTimeout(pinTimer); pinTimer = 0; }
+    pinInput = "";
+    pinMode = "check";
+    pinStage = "";
+    pinBusy = false;
+    renderPinDots();
+    setPinTip(hasPin() ? "请输入锁屏密码" : "");
+    renderLockMode();
+  }
+
+  // 根据“是否已设密码”和当前模式，切换键盘/提示/功能键文案
+  function renderLockMode() {
+    var panel = document.getElementById("nv-pin-panel");
+    var hint = document.getElementById("nv-enter-hint");
+    if (!panel || !hint) return;
+    // 无密码且不在设置流程：显示“轻触进入”，隐藏键盘
+    var editing = pinMode !== "check";
+    var showPad = hasPin() || editing;
+    panel.classList.toggle("nv-hidden", !showPad);
+    hint.classList.toggle("nv-hidden", showPad);
+    var setBtn = document.querySelector('.nv-key[data-k="set"]');
+    if (setBtn) {
+      if (pinMode === "check") setBtn.textContent = hasPin() ? "改密码" : "设密码";
+      else setBtn.textContent = "取消";
+      // 无密码时也允许点“设密码”，所以编辑态/有密码都要有键盘
+    }
+  }
+
   function renderPinDots(err) {
-    var dots = document.getElementById("nv-pin-dots").children;
+    var box = document.getElementById("nv-pin-dots");
+    if (!box) return;
+    var dots = box.children;
     for (var i = 0; i < dots.length; i++) {
-      dots[i].className = i < pinInput.length ? "on" : "";
-      if (err) dots[i].className = "err";
+      dots[i].className = err ? "err" : (i < pinInput.length ? "on" : "");
     }
   }
   function setPinTip(t) {
     var el = document.getElementById("nv-pin-tip");
-    if (el) el.textContent = t;
+    if (el) el.textContent = t || "";
+  }
+
+  // 短暂展示错误后自动回到当前步骤的提示语
+  function pinError(msg, backTip, after) {
+    pinBusy = true;
+    pinInput = "";
+    renderPinDots(true);
+    setPinTip(msg);
+    if (pinTimer) clearTimeout(pinTimer);
+    pinTimer = setTimeout(function () {
+      pinTimer = 0;
+      pinBusy = false;
+      renderPinDots();
+      setPinTip(backTip);
+      if (after) after();
+    }, 700);
   }
 
   function pinDone() {
-    var saved = Store.get(PIN_KEY, "");
+    var saved = String(Store.get(PIN_KEY, ""));
+    var v = pinInput;
+
     if (pinMode === "check") {
-      if (pinInput === String(saved)) { enterDesktop(); }
-      else {
-        renderPinDots(true);
-        setPinTip("密码错误");
-        pinInput = "";
-        setTimeout(function () { renderPinDots(); setPinTip("请输入锁屏密码"); }, 650);
+      if (!saved) { enterDesktop(); return; }
+      if (v === saved) { enterDesktop(); return; }
+      pinError("密码错误", "请输入锁屏密码");
+      return;
+    }
+
+    if (pinMode === "set-old" || pinMode === "remove-old") {
+      if (v !== saved) {
+        pinError("原密码错误", pinMode === "set-old" ? "请输入原密码" : "请输入原密码",
+          function () { pinInput = ""; renderPinDots(); });
+        return;
       }
-    } else if (pinMode === "set-old") {
-      if (pinInput === String(saved)) {
-        pinMode = "set-new"; pinInput = ""; renderPinDots(); setPinTip("请输入新密码（4 位数字）");
-      } else {
-        renderPinDots(true); setPinTip("原密码错误"); pinInput = "";
-        setTimeout(function () { renderPinDots(); setPinTip("请输入原密码"); }, 650);
+      if (pinMode === "remove-old") {
+        Store.remove(PIN_KEY);
+        toast("已关闭锁屏密码");
+        resetPinState();
+        return;
       }
-    } else if (pinMode === "set-new") {
-      pinStage = pinInput;
-      pinMode = "set-again"; pinInput = ""; renderPinDots(); setPinTip("请再次输入新密码");
-    } else if (pinMode === "set-again") {
-      if (pinInput === pinStage) {
-        Store.set(PIN_KEY, pinInput);
+      pinInput = "";
+      pinMode = "set-new";
+      renderPinDots();
+      setPinTip("请输入新密码（4 位数字）");
+      renderLockMode();
+      return;
+    }
+
+    if (pinMode === "set-new") {
+      pinStage = v;
+      pinInput = "";
+      pinMode = "set-again";
+      renderPinDots();
+      setPinTip("请再次输入新密码");
+      return;
+    }
+
+    if (pinMode === "set-again") {
+      if (v === pinStage) {
+        Store.set(PIN_KEY, v);
         toast("密码已设置");
-        pinMode = "check"; pinInput = ""; renderPinDots(); setPinTip("请输入锁屏密码");
+        resetPinState();
       } else {
-        renderPinDots(true); setPinTip("两次输入不一致"); pinInput = "";
-        pinMode = "set-new"; pinStage = "";
-        setTimeout(function () { renderPinDots(); setPinTip("请输入新密码（4 位数字）"); }, 800);
+        pinStage = "";
+        pinMode = "set-new";
+        pinError("两次输入不一致，请重新设置", "请输入新密码（4 位数字）");
       }
+      return;
     }
   }
 
+  /* ---------------- 锁屏交互绑定 ----------------
+   * 只在这里绑定事件；状态判定全部交给上面 pinDone/状态机，
+   * 避免旧实现在点击、键盘、按钮三处各写一份判断导致行为不一致。 */
   function initLock() {
     var lockEl = document.getElementById("nv-lock");
-    var hasPin = function () { return !!Store.get(PIN_KEY, ""); };
+    if (!lockEl) return;
 
-    function refreshLockMode() {
-      document.getElementById("nv-pin-panel").classList.toggle("nv-hidden", !hasPin());
-      document.getElementById("nv-enter-hint").classList.toggle("nv-hidden", hasPin());
-    }
-    refreshLockMode();
-
-    // 无密码：点击锁屏任意处进入
+    // 无密码且未在设置流程：点锁屏任意处进入
     lockEl.addEventListener("click", function (e) {
-      if (hasPin()) return;
-      // 避免点到数字键盘留白区（无密码时键盘隐藏，实际不会触发）
+      if (hasPin() || pinMode !== "check") return;
       enterDesktop();
     });
 
-    // 数字键盘
-    var padEl = document.querySelector(".nv-pad");
-    padEl.addEventListener("click", function (e) {
-      var btn = e.target;
-      if (btn.tagName !== "BUTTON") return;
-      e.stopPropagation();
-      var k = btn.getAttribute("data-k");
-      if (k === "del") {
-        pinInput = pinInput.slice(0, -1);
-        renderPinDots();
-      } else if (k === "set") {
-        if (hasPin()) {
-          pinMode = "set-old"; pinInput = ""; renderPinDots(); setPinTip("请输入原密码");
-        } else {
-          pinMode = "set-new"; pinInput = ""; renderPinDots(); setPinTip("请输入新密码（4 位数字）");
+    // 数字键盘（含 设/改密码、取消、删除）
+    var padEl = lockEl.querySelector(".nv-pad");
+    if (padEl) {
+      padEl.addEventListener("click", function (e) {
+        var btn = e.target;
+        if (!btn || btn.tagName !== "BUTTON") return;
+        e.stopPropagation();
+        if (pinBusy) return;
+        var k = btn.getAttribute("data-k");
+
+        if (k === "del") {
+          pinInput = pinInput.slice(0, -1);
+          renderPinDots();
+          return;
         }
-      } else {
+
+        if (k === "set") {
+          // 查看态：进入“设/改密码”；编辑态：取消，回到验证
+          if (pinMode === "check") {
+            if (hasPin()) {
+              pinMode = "set-old"; pinInput = "";
+              renderPinDots(); setPinTip("请输入原密码");
+            } else {
+              pinMode = "set-new"; pinInput = "";
+              renderPinDots(); setPinTip("请输入新密码（4 位数字）");
+            }
+            renderLockMode();
+          } else {
+            resetPinState();
+          }
+          return;
+        }
+
+        if (!/^[0-9]$/.test(k)) return;
         if (pinInput.length >= 4) return;
         pinInput += k;
         renderPinDots();
-        if (pinInput.length === 4) setTimeout(pinDone, 120);
-      }
-    });
+        if (pinInput.length === 4) {
+          // 稍延迟，让第 4 个圆点先显示出来
+          setTimeout(pinDone, 120);
+        }
+      });
+    }
 
-    // 物理键盘也可输入（桌面调试）
+    // 物理键盘（外接键盘/调试）
     document.addEventListener("keydown", function (e) {
       if (lockEl.classList.contains("nv-hidden")) return;
-      if (!hasPin() && (e.key === "Enter" || e.keyCode === 13)) { enterDesktop(); return; }
-      if (/^[0-9]$/.test(e.key) && pinInput.length < 4) {
-        pinInput += e.key; renderPinDots();
+      if (pinBusy) return;
+      if (!hasPin() && pinMode === "check") {
+        if (e.key === "Enter" || e.keyCode === 13) enterDesktop();
+        return;
+      }
+      if (/^[0-9]$/.test(e.key)) {
+        if (pinInput.length >= 4) return;
+        pinInput += e.key;
+        renderPinDots();
         if (pinInput.length === 4) setTimeout(pinDone, 120);
       } else if (e.key === "Backspace") {
-        pinInput = pinInput.slice(0, -1); renderPinDots();
+        e.preventDefault();
+        pinInput = pinInput.slice(0, -1);
+        renderPinDots();
+      } else if (e.key === "Escape" && pinMode !== "check") {
+        resetPinState();
       }
     });
 
-    // 每次重新锁屏都要同步模式（可能在设置后）
-    window.addEventListener("focus", refreshLockMode);
+    // 从设置页返回时同步模式（可能刚设/改/删了密码）
+    window.addEventListener("focus", function () {
+      if (!lockEl.classList.contains("nv-hidden")) renderLockMode();
+    });
+
+    resetPinState();
   }
 
   /* ---------------- 对外 API（传给每个应用） ---------------- */
@@ -3766,6 +3978,8 @@
       musicBackup: musicBackup,
       pkg: pkgApi,
       ui: ui,
+      version: function () { return OS_VERSION; },
+      build: function () { return OS_BUILD; },
       dlg: dlg,
       toast: toast,
       on: on,
@@ -3789,7 +4003,9 @@
     window.OS = API_FOR_APP;
     window.OS.registerApp = registerApp;   // 扩展口：OS.registerApp({id,name,icon,open})
 
-    applyWallpaper(ui.wallpaper());
+    // 启动时恢复壁纸：自定义渐变需连同保存的两个色标一起还原
+    var wpIdx = ui.wallpaper();
+    applyWallpaper(wpIdx, wpIdx === CUSTOM_ID ? ui.wallpaperColors() : null);
     tickClock();
     setInterval(tickClock, 1000);
     initLock();
