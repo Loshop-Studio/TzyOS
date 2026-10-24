@@ -8,7 +8,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 主机 | iZbp1efmn5fanmq042fflpZ |
+| 主机 | 本机（Linux） |
 | 浏览器 | Chromium 155（`/snap/bin/chromium`，需 `--no-sandbox`） |
 | 自动化 | playwright-core + Node v20（`/tmp/node-v20.18.1-linux-x64`） |
 | 后端 | `verify/server.py` → 监听 `:8097`，复用 novacore 真实代码 |
